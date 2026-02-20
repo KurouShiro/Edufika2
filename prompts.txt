@@ -1,0 +1,530 @@
+
+## Paparan Struktur Project Edufika (Update)
+
+## Target
+
+* Android 10+
+* Device Umum (Bukan BYOD)
+* Full build untuk diaplikasikan dalam sekolah
+
+## Bahasa Pemrograman
+
+* Kotlin
+* Java
+* MySQL / MariaDB (**migrated from PostgreSQL runtime**)
+* React Native Hybrid
+* **Node.js / Ktor API (Session Authority & Exam Control Backend)**
+* **phpMyAdmin (Database administration UI for local debugging)**
+
+## Library Pengembangan
+
+* AndroidX
+* Jetpack Nav
+* ViewModel + LiveData
+* ExoPlayer
+* BroadcastReceiver
+* LifecycleObserver
+* MediaProjection (Detection Only)
+* WebRTC
+* ReactVisionCamera ("npm install react-native-vision-camera")
+
+---
+
+## Gambaran UX/UI
+
+Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aksen style terminal dengan warna neon green dan font JetBrains Mono (font, design tombol-tombol, navbar, dll).
+
+---
+
+## Kotlin (Backend Fungsi / Native Enforcement Layer)
+
+* LoginTest.kt (Tampilan Login Session ID)
+* ExamFlowTest.kt (Tampilan Menu Memilih Isi URL/ScanQR)
+* ExamScreen.kt (Tampilan Layar Web Browser)
+* AdminPanelTest.kt (Tampilan Admin/Proktor)
+* UrlWhitelist.kt (Manajemen URL Whitelist dari Server)
+* FragmentNavigationTest.kt (Navigasi Aplikasi)
+* SessionLogger.kt (Telemetry + Violation Reporter ke Backend)
+* DeveloperAccessPanel.kt (Mode Developer)
+* ScreenLock.kt (Soft Lock UX Layer)
+* BackgroundViolationTest.kt
+* ScreenOffViolationTest.kt
+* RestartViolationTest.kt
+* **HeartbeatService.kt (Kirim status perangkat setiap 5Ã¢â‚¬â€œ10 detik)**
+* **IntegrityCheck.kt (Root / Emulator / Debugger Detection)**
+* **FocusMonitor.kt (Deteksi aplikasi keluar / multi-window)**
+* **TokenRegistry.kt (Registry token lokal + expiry metadata untuk mode debug/admin)**
+* **UrlWhitelistStore (cache sinkronisasi whitelist dari backend, bukan source of truth)**
+* **Session expiry enforcement (popup + auto shutdown saat token kadaluarsa)**
+* **SessionLogger -> logger.txt (log lokal untuk audit device-side)**
+* **Proctor PIN verification via backend API (validitas harian)**
+* **SessionClient health-check endpoint (`/health`) untuk validasi koneksi backend**
+* **DeveloperAccessPanel mendukung konfigurasi backend LAN URL untuk WiFi debugging (`http://<PC_IP>:8091`)**
+
+---
+
+## React Native (Frontend Fungsi / UI Layer)
+
+* LoginScreen.tsx
+* SplashScreen.tsx
+* AdminDashboardPanel.tsx
+* DeveloperAccessScreen.tsx
+* ExamBrowserScreen.tsx
+* ViolationScreen.tsx
+* URLWhitelist.tsx
+* SuccessScreen.tsx
+* QRScannerScreen.tsx
+* ExamSelectionScreen.tsx
+* ManualInputScreen.tsx
+* ManualInputFail.tsx
+* HistoryScreen.tsx
+* Settings.tsx
+* Keypad.tsx
+* Layout.tsx
+* **LiveStatusOverlay.tsx (Watermark + Session Info Overlay)**
+* **IntegrityWarningModal.tsx (Peringatan otomatis jika perilaku mencurigakan)**
+* **LoginScreen.tsx (Exit button tersedia sebelum login untuk shutdown app terkontrol)**
+* **Settings.tsx (Localization aktif: Bahasa Indonesia dan English benar-benar diterapkan ke UI)**
+* **Keypad.tsx (Dukungan huruf kecil/kapital untuk input token dan password)**
+* **AdminDashboardPanel.tsx (Token expiry input + copy token + submit Proctor PIN policy)**
+* **DeveloperAccessScreen.tsx (Generate admin token + expiry + copy)**
+* **ExamBrowserScreen.tsx (Token countdown timer + expiry popup + auto exit)**
+* **Admin dashboard layout scrollable penuh untuk layar kecil + logout button selalu dapat diakses**
+
+---
+
+## Fitur - Fitur
+
+### Backend Architecture
+```text
+                +--------------------+
+                |  Admin Dashboard   |
+                +----------+---------+
+                           | creates session
+                           v
++---------------------------------------------+
+|              Exam Session API               |
+| - Session Authority (truth source)          |
+| - Risk Engine                               |
+| - Token Minting                             |
+| - Heartbeat Validator                       |
++----------------------+----------------------+
+                       |
+                       v
+             MySQL/MariaDB Database (Docker)
+                       |
+                       v
+               Audit / Violation Logs
+```
+
+Student Device <-> Session API (poll + heartbeat every few seconds)
+
+### Exam Browser Environment
+
+* WebView terkunci hanya untuk domain yang di-whitelist oleh server
+* JavaScript: ON
+* File Access: OFF
+* Multi Window: OFF
+* Clipboard / Text Selection: Disabled
+* Dynamic watermark (StudentID + Timestamp)
+* Countdown waktu token pada layar browser ujian (RN)
+* Session timeout popup + auto-exit ketika token kadaluarsa
+* Exit browser siswa wajib verifikasi Proctor PIN dari backend
+
+### Anti-Cheat Monitoring (Non-OS Enforcement Model)
+
+* Deteksi aplikasi di background
+* Deteksi split-screen / multi-window
+* Deteksi overlay apps
+* Deteksi accessibility service mencurigakan
+* Screenshot & screen recording diblok menggunakan FLAG_SECURE
+* MediaProjection attempt detection (log only)
+* Root / Emulator / Debugger detection (risk scoring, bukan blocking)
+* TLS pinning untuk mencegah proxy interception
+
+### Behavioral Integrity Model
+
+Sistem tidak memblokir keras, tetapi:
+
+* Mencatat perilaku mencurigakan
+* Memberikan **Risk Score**
+* Server menentukan apakah sesi dilanjutkan / dikunci / ditinjau
+* Menulis log lokal ke `logger.txt` agar dapat diekspor admin untuk analisis
+
+---
+
+## Sistem Session Token Baru (Server Authoritative)
+
+Session Token bukan JWT login biasa.
+
+Session Token adalah:
+
+* Token acak yang dibuat proktor
+* Sekali pakai untuk "claim session"
+* Setelah itu diganti dengan Access Signature berumur pendek
+
+### Token Lifecycle
+
+Exam Session Token
+- Dibuat oleh Proktor
+- Pair token dibuat per sesi (`S-*` siswa, `A-*` admin/proktor)
+- Di-claim oleh Device Siswa
+- Device Binding Dilakukan
+- Kebijakan PIN proktor diturunkan ke binding siswa saat claim
+- Expiry timestamp dikirim ke client
+- Access Signature Rotasi Setiap Â±5 Menit
+- Heartbeat wajib setiap 5â€“10 detik
+- Risiko dihitung server
+- Server dapat mengakhiri sesi kapan saja
+
+---
+
+## Backend Architecture (Node.js / Ktor API)
+
+Backend berfungsi sebagai:
+**Exam Session Authority (Single Source of Truth)**
+
+Bukan sekadar authentication server.
+
+### Backend Responsibilities
+
+* Membuat & mengelola exam session
+* Validasi heartbeat perangkat
+* Menghitung risk score
+* Rotasi access signature
+* Runtime database menggunakan MySQL/MariaDB (`mysql2`) dengan migration tracker `schema_migrations`
+* Menjadi sumber kebenaran whitelist URL (server authoritative)
+* Mengelola launch URL untuk mode lockdown web browser (Google Forms/web host)
+* Mengelola kebijakan Proctor PIN harian
+* Proctor PIN policy bersifat **session-scoped**: template di `session_student_pin_templates`, lalu dibinding ke `binding_id` siswa di `session_proctor_pins`
+* Mengelola token pair per exam session: satu `S-*` (student) dan satu `A-*` (admin/proctor)
+* Mengirim metadata expiry token ke client untuk countdown/enforcement
+* Fokus pada session authority + launch URL host pihak ketiga (tanpa menyimpan bank soal lokal)
+* Mencatat seluruh aktivitas audit
+* Auto-archive + cleanup sesi selesai/revoke ke `session_cleanup_audit`
+* Live revoke session oleh proktor
+
+---
+
+## Endpoint Utama API
+
+POST /session/create Ã¢â€ â€™ Proktor membuat sesi
+POST /session/claim Ã¢â€ â€™ Siswa masuk ujian
+POST /session/heartbeat Ã¢â€ â€™ Validasi liveness
+POST /session/event Ã¢â€ â€™ Kirim violation log
+POST /session/finish Ã¢â€ â€™ Akhiri ujian
+POST /admin/revoke Ã¢â€ â€™ Paksa berhenti sesi
+GET /session/whitelist Ã¢â€ â€™ Ambil whitelist aktif dari server
+POST /session/whitelist/add Ã¢â€ â€™ Tambah URL whitelist (server authoritative)
+POST /session/whitelist/verify Ã¢â€ â€™ Validasi URL terhadap whitelist server
+GET /exam/launch Ã¢â€ â€™ Ambil launch URL browser exam
+POST /exam/launch Ã¢â€ â€™ Update launch URL (admin/developer only)
+POST /session/proctor-pin/set Ã¢â€ â€™ Simpan PIN proktor (refresh harian)
+POST /session/proctor-pin/verify Ã¢â€ â€™ Verifikasi PIN proktor saat exit exam
+GET /session/proctor-pin/status Ã¢â€ â€™ Cek status PIN proktor hari ini
+GET /health Ã¢â€ â€™ Tes koneksi backend dari client (DeveloperAccess/Admin)
+
+---
+
+## Heartbeat Protocol (Wajib)
+
+App mengirim status:
+
+{
+focus: true,
+multi_window: false,
+device_state: normal,
+timestamp: xxx
+}
+
+Jika heartbeat berhenti >30 detik:
+Session otomatis dikunci server.
+
+---
+
+## Risk Scoring Engine (Server Side)
+
+Setiap kejadian meningkatkan skor:
+
+| Event                | Score |
+| -------------------- | ----- |
+| App background       | +3    |
+| Overlay detected     | +5    |
+| Accessibility active | +5    |
+| Network drop         | +2    |
+| Repeated violations  | +6    |
+
+Jika melewati threshold:
+Session Ã¢â€ â€™ LOCKED (butuh verifikasi proktor).
+
+---
+
+## Implementasi ExamFragment
+
+Whitelist URL tidak disimpan lokal.
+Selalu diverifikasi via API.
+
+Navigasi keluar domain langsung dianggap violation.
+Jika token kadaluarsa: tampil popup dan aplikasi keluar otomatis.
+Exit exam siswa hanya jika PIN proktor valid dari server (kebijakan harian).
+Jika validasi whitelist server aktif dan server gagal dijangkau, akses URL ditolak.
+Input PIN proktor yang salah tidak dihitung sebagai violation event, hanya ditolak untuk exit.
+Logout admin/siswa melepaskan sesi + soft-kiosk, lalu mengizinkan keluar aplikasi.
+
+---
+
+## DeveloperAccessPanel.kt
+
+Mode Developer:
+
+* Menonaktifkan monitoring sementara
+* Tidak aktif tanpa autentikasi server
+* Semua aktivitas tetap dicatat backend
+* Dapat generate admin token (expiry configurable + copy token)
+* Dapat set API base URL + health check backend
+* Hanya developer passcode `EDU_DEV_ACCESS` yang dapat membuka panel ini
+* AdminID tidak dapat mengakses DeveloperAccessPanel
+
+---
+
+## Kiosk Mode (Soft Enforcement Only)
+
+Menggunakan:
+
+* Immersive mode
+* Focus monitoring
+* Behavioral detection
+* Reset state setiap launch (kiosk disable state tidak dipersisten antar reboot app)
+* Setelah logout, soft-kiosk dilepas agar user dapat keluar aplikasi secara normal
+
+Tidak menggunakan Device Owner / MDM.
+Model berbasis observasi dan audit, bukan kontrol penuh OS.
+
+---
+
+## File Directory
+
+(Struktur tetap sama, dengan tambahan service monitoring & integrity module.)
+
+```text
+schema-admin/
+|-- app.py
+|-- migrations.py
+|-- ui.py
+`-- build.ps1
+
+launch-schema-admin.cmd
+launch-schema-admin.ps1
+
+app/src/main/java/com/techivibes/edufika/
+|-- monitoring/
+|   |-- HeartbeatService.kt
+|   |-- FocusMonitor.kt
+|   `-- IntegrityCheck.kt
+|-- backend/
+|   `-- SessionClient.kt
+`-- data/
+    |-- TokenRegistry.kt
+    `-- SessionLogger.kt
+
+edufika-session-api/
+|-- src/db/pool.ts
+|-- src/db/runMigrations.ts
+|-- src/db/migrations/mysql/001_init.sql
+|-- src/db/migrations/005_session_scope_and_cleanup.sql
+|-- src/db/migrations/006_student_pin_template.sql
+|-- docker-compose.yml
+|-- .env
+|-- .env.example
+`-- README.md
+
+backenddebug.txt
+
+setup/
+|-- quick-install-debug.bat
+|-- quick-metro.bat
+|-- quick-adb-reverse.bat
+|-- quick-usb-debug.bat
+`-- quick-debug-tabs.bat
+
+app/src/main/java/com/techivibes/edufika/
+|-- MainActivity.kt
+|-- ui/
+|   |-- LoginTest.kt
+|   |-- ExamFlowTest.kt
+|   `-- AdminPanelTest.kt
+|-- navigation/
+|   |-- ExamScreen.kt
+|   `-- FragmentNavigationTest.kt
+|-- security/
+|   |-- BackgroundViolationTest.kt
+|   |-- ScreenOffViolationTest.kt
+|   `-- RestartViolationTest.kt
+|-- utils/
+|   |-- TestConstants.kt
+|   |-- DeviceCompatibility.kt
+|   `-- TestUtils.kt
+`-- runners/
+    `-- CustomTestRunner.kt
+```
+
+---
+
+## Tujuan Sistem
+
+Edufika dirancang sebagai:
+**Observable Integrity Examination Platform**
+
+Bukan lockdown absolut,
+melainkan sistem yang:
+
+* Meningkatkan kesulitan cheating
+* Memberikan forensic traceability
+* Memberikan kontrol live kepada proktor
+* Menjalankan mode utama lockdown web browser untuk host eksternal (mis. Google Forms) dengan monitoring realtime
+* Tetap dapat berjalan tanpa OS-level administration.
+Debug Checkup : 
+
+```powershell
+cd "C:\Users\MyBook Hype AMD\AndroidStudioProjects\Edufika2"
+```
+
+1. Start Docker database stack (MariaDB + phpMyAdmin):
+```powershell
+docker compose up -d
+```
+
+2. Run migration:
+```powershell
+npm.cmd --prefix edufika-session-api run migrate
+```
+
+3. Start backend API (required for token/whitelist/PIN):
+```powershell
+cd edufika-session-api
+npm run dev
+```
+
+4. Start Metro:
+```powershell
+cd "C:\Users\MyBook Hype AMD\AndroidStudioProjects\Edufika2"
+.\setup\quick-metro.bat
+```
+
+5. Install debug APK:
+```powershell
+.\setup\quick-install-debug.bat
+```
+
+6. WiFi debugging mode (recommended jika backend sudah online):
+```powershell
+ipconfig
+```
+Gunakan IPv4 PC aktif, lalu di app `DeveloperAccess` set API URL ke:
+```text
+http://<PC_LAN_IP>:8091
+```
+Contoh:
+```text
+http://192.168.1.9:8091
+```
+
+7. USB fallback mode (jika LAN gagal):
+```powershell
+.\setup\quick-adb-reverse.bat
+```
+Lalu set API URL:
+```text
+http://127.0.0.1:8091
+```
+
+8. Optional full helper:
+```powershell
+.\setup\quick-debug-tabs.bat
+```
+This opens install + metro + adb tabs; keep backend (`npm run dev`) running separately.
+
+Quick health check from PC:
+```powershell
+Invoke-RestMethod http://localhost:8091/health
+```
+Should return `ok: true`.
+
+phpMyAdmin local debug URL:
+```text
+http://localhost:8089
+```
+
+Reference checklist file:
+```text
+backenddebug.txt
+```
+
+DBMS + API development debugging (without VPS) :
+
+1. Node.js + MySQL architecture 
+2. Docker to simulate a VPS Environment
+3. ngrok to simulate internet connectivity 
+
+Simulating VPS using free Supabase : 
+Login : Github login
+DB Password : kuroushiro_
+
+Docker startup : 
+cd C:\Users\MyBook Hype AMD\AndroidStudioProjects\Edufika2
+docker compose up -d
+npm.cmd --prefix edufika-session-api run migrate
+npm.cmd --prefix edufika-session-api run dev
+
+## App Installation (WiFi)
+
+
+1. Android 11+ (`Wireless debugging`)
+- On phone: `Developer options` -> enable `Wireless debugging`.
+- Tap `Pair device with pairing code`.
+- On PC:
+```bat
+adb pair <PHONE_IP>:<PAIR_PORT>
+```
+- Enter pairing code from phone.
+- Then connect:
+```bat
+adb connect <PHONE_IP>:<CONNECT_PORT>
+adb devices
+```
+
+2. Android 10 or older (USB once, then WiFi)
+- Connect USB first:
+```bat
+adb tcpip 5555
+```
+- Get phone WiFi IP (from phone WiFi details), unplug USB, then:
+```bat
+adb connect <PHONE_IP>:5555
+adb devices
+```
+
+3. Install app over WiFi
+From repo root:
+```bat
+cd "C:\Users\MyBook Hype AMD\AndroidStudioProjects\Edufika2"
+gradlew.bat :app:installDebug
+adb shell monkey -p com.techivibes.edufika -c android.intent.category.LAUNCHER 1
+```
+
+4. If using RN debug UI, run Metro on LAN
+```bat
+npm.cmd --prefix react-native run start -- --host 0.0.0.0 --port 8081
+```
+On phone dev menu set JS server host to:
+`<PC_LAN_IP>:8081`
+
+5. Backend URL in app (WiFi mode)
+Set in Developer panel:
+`http://<PC_LAN_IP>:8091`
+
+Your current `setup\quick-usb-debug.bat` is USB+reverse mode, not WiFi mode.
+
+URL Whitelist/Token testing link : https://docs.google.com/forms/d/1y51jnoNjYvZWYkhPqJLsfHWRDxXr_iA-zPK8VY4-vcA/viewform
+
+---

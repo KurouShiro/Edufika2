@@ -1,0 +1,265 @@
+Edufika Backend WiFi Debug Guide (Windows)
+=========================================
+
+Scope:
+- Start Docker DB stack (MariaDB + phpMyAdmin)
+- Start Node backend API
+- Connect Android app over WiFi
+- Validate health, token flow, whitelist, heartbeat, and DB writes
+- Quick troubleshooting for common failures
+
+
+0) Current project ports/config used in this guide
+--------------------------------------------------
+- MariaDB host port: 3307 (container 3306)
+- phpMyAdmin: 8089
+- Backend API: 8091
+- Backend host bind: 0.0.0.0
+
+Expected file values:
+- docker-compose.yml:
+  - mariadb port mapping: "3307:3306"
+  - phpmyadmin port mapping: "8089:80"
+- edufika-session-api/.env:
+  - HOST=0.0.0.0
+  - PORT=8091
+  - DB_DIALECT=mysql
+  - DATABASE_URL=mysql://edufika:edufika@localhost:3307/edufika
+
+
+1) Open terminal in repo root
+-----------------------------
+CMD:
+cd C:\Users\MyBook Hype AMD\AndroidStudioProjects\Edufika2
+
+
+2) Start Docker database stack
+------------------------------
+docker compose up -d
+
+Check containers:
+docker ps
+
+Expected containers:
+- edufika-mariadb
+- edufika-phpmyadmin
+
+Open phpMyAdmin:
+- http://localhost:8089
+- user: root
+- pass: rootpass
+
+
+3) Backend dependency install (one-time or after package changes)
+-----------------------------------------------------------------
+npm.cmd --prefix edufika-session-api install
+
+
+4) Run DB migrations
+--------------------
+npm.cmd --prefix edufika-session-api run migrate
+
+If migration fails with auth:
+- verify DATABASE_URL in edufika-session-api/.env
+- verify mariadb container is running
+
+
+5) Start backend API
+--------------------
+npm.cmd --prefix edufika-session-api run dev
+
+Backend should listen on:
+- 0.0.0.0:8091
+
+
+6) Verify backend from PC first
+-------------------------------
+curl.exe -i http://127.0.0.1:8091/health
+
+Expected:
+- HTTP/1.1 200 OK
+- JSON body with {"ok":true,...}
+
+
+7) Get PC LAN IP for WiFi debugging
+-----------------------------------
+ipconfig
+
+Use the active WiFi adapter IPv4 address, example:
+- 192.168.1.9
+
+Test LAN health from PC:
+curl.exe -i http://192.168.1.9:8091/health
+
+
+8) Connect app on phone over WiFi
+---------------------------------
+Requirements:
+- Phone and PC on same WiFi subnet
+- Disable phone mobile data during test
+- Avoid guest WiFi/client isolation
+
+In app:
+- Open Developer Access Panel
+- Set "Backend API URL" to EXACTLY:
+  http://<PC_LAN_IP>:8091
+  example: http://192.168.1.9:8091
+- Tap save
+- Tap "Tes Koneksi Backend"
+
+Important:
+- Always include "http://"
+- If scheme is omitted, app URL normalization may become https and fail.
+
+
+9) Windows firewall rule (if LAN health fails on phone)
+--------------------------------------------------------
+Run in elevated CMD:
+netsh advfirewall firewall add rule name="Edufika API 8091" dir=in action=allow protocol=TCP localport=8091 profile=any
+
+Then retest from phone browser:
+http://<PC_LAN_IP>:8091/health
+
+
+10) Quick API smoke test (PowerShell)
+-------------------------------------
+Use this to validate create/claim/whitelist/pin/heartbeat:
+
+$base = 'http://192.168.1.7:8091'
+$form = 'https://docs.google.com/forms/d/1y51jnoNjYvZWYkhPqJLsfHWRDxXr_iA-zPK8VY4-vcA/viewform'
+
+$c = Invoke-RestMethod -Method POST -Uri "$base/session/create" -ContentType 'application/json' -Body (@{
+  proctor_id = 'AdminID'
+  token_count = 2
+  token_ttl_minutes = 30
+  launch_url = $form
+} | ConvertTo-Json)
+
+$sid = $c.session_id
+$st  = ($c.tokens | Where-Object { $_ -like 'S-*' } | Select-Object -First 1)
+$at  = ($c.tokens | Where-Object { $_ -like 'A-*' } | Select-Object -First 1)
+
+$a = Invoke-RestMethod -Method POST -Uri "$base/session/claim" -ContentType 'application/json' -Body (@{
+  token = $at
+  device_fingerprint = 'pc-admin-1'
+  role_hint = 'admin'
+} | ConvertTo-Json)
+
+$s = Invoke-RestMethod -Method POST -Uri "$base/session/claim" -ContentType 'application/json' -Body (@{
+  token = $st
+  device_fingerprint = 'phone-student-1'
+  role_hint = 'student'
+} | ConvertTo-Json)
+
+Invoke-RestMethod -Method POST -Uri "$base/session/whitelist/add" -ContentType 'application/json' -Body (@{
+  session_id = $sid
+  access_signature = $a.access_signature
+  url = $form
+} | ConvertTo-Json) | Out-Null
+
+$ok = Invoke-RestMethod -Method POST -Uri "$base/session/whitelist/verify" -ContentType 'application/json' -Body (@{
+  session_id = $sid
+  access_signature = $s.access_signature
+  url = $form
+} | ConvertTo-Json)
+
+$hb = Invoke-RestMethod -Method POST -Uri "$base/session/heartbeat" -ContentType 'application/json' -Body (@{
+  session_id = $sid
+  access_signature = $s.access_signature
+  device_binding_id = $s.device_binding_id
+  focus = $true
+  multi_window = $false
+  network_state = 'stable'
+  timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+} | ConvertTo-Json)
+
+"session_id=$sid whitelist_allowed=$($ok.allowed) heartbeat_ok=$($hb.accepted) lock=$($hb.lock)"
+
+
+11) DB verification queries (phpMyAdmin SQL tab)
+-------------------------------------------------
+USE edufika;
+SET @sid = 'your-session-id-here';
+
+SELECT id, status, start_time, end_time
+FROM exam_sessions
+WHERE BINARY id = BINARY @sid;
+
+SELECT token, role, claimed, claimed_at, expires_at
+FROM session_tokens
+WHERE exam_session_id = @sid;
+
+SELECT db.id, db.role, db.risk_score, db.locked, db.lock_reason, db.last_seen_at
+FROM device_bindings db
+JOIN session_tokens st ON st.token = db.token
+WHERE st.exam_session_id = @sid;
+
+SELECT url, created_at
+FROM session_whitelist
+WHERE exam_session_id = @sid
+ORDER BY created_at DESC;
+
+SELECT *
+FROM heartbeats
+ORDER BY created_at DESC
+LIMIT 50;
+
+SELECT *
+FROM violations
+ORDER BY created_at DESC
+LIMIT 50;
+
+SELECT *
+FROM session_student_pin_templates
+ORDER BY updated_at DESC
+LIMIT 20;
+
+SELECT *
+FROM session_proctor_pins
+ORDER BY updated_at DESC
+LIMIT 20;
+
+
+
+12) Common error map
+--------------------
+[A] "docker is not recognized"
+- Install Docker Desktop, restart terminal.
+
+[B] Port 3306 already in use
+- Keep compose mapping as 3307:3306 and use 3307 in DATABASE_URL.
+
+[C] EADDRINUSE on 8091
+- Another process owns API port.
+- Find PID: netstat -ano | findstr :8091
+- Kill: taskkill /PID <PID> /F
+- Restart backend.
+
+[D] Phone browser ERR_CONNECTION_REFUSED
+- Backend not actually listening on 0.0.0.0:8091
+- Wrong IP/subnet
+- Guest WiFi/AP isolation
+- Firewall rule missing
+
+[E] App shows "Backend tidak terjangkau" while browser works
+- Ensure app base URL includes http:// and correct port:
+  http://<PC_LAN_IP>:8091
+- Save URL again in Developer panel and re-test.
+
+[F] phpMyAdmin "No database selected"
+- Run: USE edufika;
+
+[G] Collation mismatch / FK collation conversion errors
+- For early dev: recreate DB cleanly with consistent utf8mb4 collation and rerun migrations.
+
+
+13) Daily restart checklist (fast)
+----------------------------------
+1. docker compose up -d
+2. npm.cmd --prefix edufika-session-api run migrate
+3. npm.cmd --prefix edufika-session-api run dev
+4. Test local health: http://127.0.0.1:8091/health
+5. Test LAN health: http://<PC_LAN_IP>:8091/health
+6. Set app backend URL: http://<PC_LAN_IP>:8091
+7. Run token + whitelist + heartbeat test in app
+

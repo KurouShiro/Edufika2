@@ -1,0 +1,7 @@
+{
+  "name": "Edufika Prototype",
+  "description": "A high-integrity exam browser prototype with soft pastel terminal aesthetics, featuring session token management, real-time violation monitoring, and proctor controls.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

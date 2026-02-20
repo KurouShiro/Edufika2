@@ -1,0 +1,23 @@
+# Project Edufika Bug Reports && Feature Updates
+ 1. App cannot be logged out after logging in. (Fixed)
+ 2. Fake Kiosk mode cannot be disabled causing the user to be stuck. (Fixed)
+ 3. UI is lackluster in design. (Refer to edufika-prototype folder in the future for UI design) (Fixed)
+ 4. Token implementation is bugged, no configured Admin or Student login for debugging purposes. (Fixed)
+ 5. QR feature is not working. (Fixed)
+ 6. WebView functionality does not work, browser does not open after the QR code is scanned.(Fixed) 
+ 7. UI bug ; App crashes when attempting to open React Native UI and the UI fails to open when prompted. (Fixed)
+ 8. URL Whitelist functionality is missing in Admin Dashboard. (Fixed)
+ 9. Kiosk Mode remains disabled after rebooting the app, Kiosk mode state should not persist betwen launches. (Fixed)
+ 10. AdminID SHOULD NOT have access to DeveloperAccessPanel, that is reserved for developers only and can only be access through the secret passcode (EDU_DEV_ACCESS) (Fixed)
+ 11. Violation detection bugs, the app detects a "violation" after failing to input the right proctor PIN number. This is an unintended bug. (Fixed)
+ 12. Once student/admin has logged out, they should be allowed to exit the app. When the user (student/admin) logs out of their session, the application shuts down on it's own and disables Kiosk Mode until it's been rebooted again. They should also be able to exit the app in the session token login screen. Add an exit button that allows them to shutdown the app in that way. (Fixed)
+ 13. RN UI bug : Keypad.tx is missing lowercase text option which is restricting it's ability to type lowercase letters. (Fixed)
+ 14. DeveloperAccessPanel should have the ability to generate admin tokens for admin login. (Fixed)
+ 15. Tokens should be configurable in Admin Dashboard when generated. They should have an expiry date that can be set by the admin during token generation. *Once the timer runs out, the user should be notified with a pop up that their time has run out and that they will be kicked out of the app automatically. (Fixed)
+ 16. Add a function to Admin Dashboard to copy paste the generated token. (Fixed)
+ 17. Store logger information locally in a logger.txt file that admins can access on their device and/or send to developers for data anaylsis. (Fixed)
+ 18. Whitelisted URL data should be stored in the database for the app to refer to instead of being stored locally. (Fixed)
+ 19. For the RN web browser screen, add a timer that indicates how much time left until their session token expires. (Fixed)
+ 20. Proctor PIN is set only once during the start of the exams, stored in the database and is refreshed daily. Implement the RN UI, the functionality and the database schema (if needed) so that an admin can submit the PIN from Admin Dashboard and have it be stored in the database. (Fixed)
+
+ - * Notes : 15-02-2026

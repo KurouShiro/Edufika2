@@ -1,0 +1,430 @@
+package com.techivibes.edufika.backend
+
+import android.content.Context
+import com.techivibes.edufika.data.SessionState
+import com.techivibes.edufika.data.UserRole
+import com.techivibes.edufika.utils.TestUtils
+import com.techivibes.edufika.utils.TestConstants
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.CertificatePinner
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.time.Instant
+import java.net.URLEncoder
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+
+data class ClaimResponse(
+    val sessionId: String,
+    val accessSignature: String,
+    val role: String,
+    val deviceBindingId: String,
+    val tokenExpiresAtMillis: Long?,
+    val launchUrl: String?,
+    val whitelist: List<String>
+)
+
+data class CreateSessionResponse(
+    val sessionId: String,
+    val token: String?,
+    val tokens: List<String>,
+    val launchUrl: String?
+)
+
+data class LaunchConfigResponse(
+    val launchUrl: String?,
+    val provider: String?,
+    val lockToHost: Boolean
+)
+
+data class HeartbeatPayload(
+    val focus: Boolean,
+    val multiWindow: Boolean,
+    val deviceState: String,
+    val timestamp: Long,
+    val riskScore: Int,
+    val overlayDetected: Boolean,
+    val accessibilityActive: Boolean,
+    val debugDetected: Boolean,
+    val emulatorDetected: Boolean,
+    val rooted: Boolean
+)
+
+data class HeartbeatResponse(
+    val accepted: Boolean,
+    val lock: Boolean,
+    val rotateSignature: String?,
+    val message: String,
+    val whitelist: List<String>
+)
+
+data class ProctorPinStatusResponse(
+    val configured: Boolean,
+    val effectiveDate: String?,
+    val isActiveToday: Boolean
+)
+
+data class ProctorPinVerifyResponse(
+    val valid: Boolean,
+    val reason: String?,
+    val effectiveDate: String?
+)
+
+class SessionClient(private val context: Context) {
+
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    private val strictClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .certificatePinner(
+                CertificatePinner.Builder()
+                    .add(TestConstants.TLS_PIN_HOST, TestConstants.TLS_PIN_SHA256)
+                    .build()
+            )
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private val fallbackClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .build()
+    }
+
+    fun getServerBaseUrl(): String {
+        val prefs = context.getSharedPreferences(TestConstants.PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(TestConstants.PREF_SERVER_BASE_URL, TestConstants.SERVER_BASE_URL)
+            ?: TestConstants.SERVER_BASE_URL
+    }
+
+    fun setServerBaseUrl(rawBaseUrl: String) {
+        val normalized = normalizeBaseUrl(rawBaseUrl)
+        context.getSharedPreferences(TestConstants.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(TestConstants.PREF_SERVER_BASE_URL, normalized)
+            .apply()
+    }
+
+    private suspend fun postJson(path: String, body: JSONObject): JSONObject? = withContext(Dispatchers.IO) {
+        val base = getServerBaseUrl().trimEnd('/')
+        val request = Request.Builder()
+            .url("$base$path")
+            .post(body.toString().toRequestBody(jsonMediaType))
+            .build()
+        executeWithFallback(request)
+    }
+
+    private suspend fun getJson(path: String): JSONObject? = withContext(Dispatchers.IO) {
+        val base = getServerBaseUrl().trimEnd('/')
+        val request = Request.Builder()
+            .url("$base$path")
+            .get()
+            .build()
+        executeWithFallback(request)
+    }
+
+    private fun executeWithFallback(request: Request): JSONObject? {
+        val strictResult = runCatching { strictClient.newCall(request).execute() }
+        if (strictResult.isSuccess) {
+            strictResult.getOrNull()?.use { response ->
+                if (!response.isSuccessful) return null
+                return response.body?.string()?.takeIf { it.isNotBlank() }?.let { JSONObject(it) }
+            }
+        }
+
+        val fallbackResult = runCatching { fallbackClient.newCall(request).execute() }
+        if (fallbackResult.isSuccess) {
+            fallbackResult.getOrNull()?.use { response ->
+                if (!response.isSuccessful) return null
+                return response.body?.string()?.takeIf { it.isNotBlank() }?.let { JSONObject(it) }
+            }
+        }
+
+        return null
+    }
+
+    suspend fun createSessionBundle(
+        proctorId: String,
+        launchUrl: String? = null,
+        tokenTtlMinutes: Int? = null,
+        tokenCount: Int? = null
+    ): CreateSessionResponse? {
+        val body = JSONObject()
+            .put("proctor_id", proctorId)
+            .put("timestamp", System.currentTimeMillis())
+        if (!launchUrl.isNullOrBlank()) {
+            body.put("launch_url", TestUtils.normalizeUrl(launchUrl))
+        }
+        if (tokenTtlMinutes != null) {
+            body.put("token_ttl_minutes", tokenTtlMinutes)
+        }
+        if (tokenCount != null) {
+            body.put("token_count", tokenCount)
+        }
+        val response = postJson("/session/create", body) ?: return null
+        return CreateSessionResponse(
+            sessionId = response.optString("session_id"),
+            token = response.optString("token").ifBlank { null },
+            tokens = response.optJSONArray("tokens").toStringList(),
+            launchUrl = response.optString("launch_url").ifBlank { null }
+        )
+    }
+
+    suspend fun createSession(
+        proctorId: String,
+        launchUrl: String? = null,
+        tokenTtlMinutes: Int? = null
+    ): String? {
+        return createSessionBundle(
+            proctorId = proctorId,
+            launchUrl = launchUrl,
+            tokenTtlMinutes = tokenTtlMinutes
+        )?.token
+    }
+
+    suspend fun claimSession(token: String, roleHint: String): ClaimResponse? {
+        val binding = deviceBindingId()
+        val body = JSONObject()
+            .put("token", token)
+            .put("device_binding_id", binding)
+            .put("role_hint", roleHint)
+            .put("timestamp", System.currentTimeMillis())
+
+        val response = postJson("/session/claim", body) ?: return null
+        val sessionId = response.optString("session_id")
+        val signature = response.optString("access_signature")
+        if (sessionId.isBlank() || signature.isBlank()) return null
+
+        val role = response.optString("role", "student")
+        val serverBindingId = response.optString("device_binding_id").ifBlank { binding }
+        val tokenExpiresAtMillis = response.optString("token_expires_at")
+            .ifBlank { null }
+            ?.let { parseIsoMillis(it) }
+        val launchUrl = response.optString("launch_url").ifBlank { null }
+        val whitelist = response.optJSONArray("whitelist").toStringList()
+        return ClaimResponse(
+            sessionId = sessionId,
+            accessSignature = signature,
+            role = role,
+            deviceBindingId = serverBindingId,
+            tokenExpiresAtMillis = tokenExpiresAtMillis,
+            launchUrl = launchUrl,
+            whitelist = whitelist
+        )
+    }
+
+    suspend fun sendHeartbeat(payload: HeartbeatPayload): HeartbeatResponse? {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+            .put("device_binding_id", SessionState.deviceBindingId)
+            .put("focus", payload.focus)
+            .put("multi_window", payload.multiWindow)
+            .put("device_state", payload.deviceState)
+            .put("timestamp", payload.timestamp)
+            .put("risk_score", payload.riskScore)
+            .put("overlay_detected", payload.overlayDetected)
+            .put("accessibility_active", payload.accessibilityActive)
+            .put("debug_detected", payload.debugDetected)
+            .put("emulator_detected", payload.emulatorDetected)
+            .put("rooted", payload.rooted)
+
+        val response = postJson("/session/heartbeat", body) ?: return null
+        return HeartbeatResponse(
+            accepted = response.optBoolean("accepted", true),
+            lock = response.optBoolean("lock", false),
+            rotateSignature = response.optString("rotate_signature").ifBlank { null },
+            message = response.optString("message", "heartbeat ok"),
+            whitelist = response.optJSONArray("whitelist").toStringList()
+        )
+    }
+
+    suspend fun sendViolationEvent(type: String, detail: String, riskScore: Int): Boolean {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+            .put("event_type", type)
+            .put("detail", detail)
+            .put("risk_score", riskScore)
+            .put("timestamp", System.currentTimeMillis())
+        return postJson("/session/event", body) != null
+    }
+
+    suspend fun fetchWhitelist(): List<String>? {
+        val path = "/session/whitelist?session_id=${SessionState.sessionId}"
+        val response = getJson(path) ?: return null
+        return response.optJSONArray("whitelist").toStringList()
+    }
+
+    suspend fun fetchLaunchConfig(
+        sessionId: String = SessionState.sessionId,
+        accessSignature: String = SessionState.accessSignature
+    ): LaunchConfigResponse? {
+        if (sessionId.isBlank() || accessSignature.isBlank()) return null
+        val encodedSession = urlEncode(sessionId)
+        val encodedSignature = urlEncode(accessSignature)
+        val path = "/exam/launch?session_id=$encodedSession&access_signature=$encodedSignature"
+        val response = getJson(path) ?: return null
+        return LaunchConfigResponse(
+            launchUrl = response.optString("launch_url").ifBlank { null },
+            provider = response.optString("provider").ifBlank { null },
+            lockToHost = response.optBoolean("lock_to_host", true)
+        )
+    }
+
+    suspend fun pingHealth(): Boolean {
+        val response = getJson("/health") ?: return false
+        return response.optBoolean("ok", false)
+    }
+
+    suspend fun addWhitelistUrl(url: String): Boolean {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+            .put("url", url)
+        return postJson("/session/whitelist/add", body) != null
+    }
+
+    suspend fun verifyWhitelistUrl(url: String): Boolean? {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+            .put("url", url)
+        val response = postJson("/session/whitelist/verify", body) ?: return null
+        return response.optBoolean("allowed", false)
+    }
+
+    suspend fun finishSession(): Boolean {
+        return finishSession(
+            sessionId = SessionState.sessionId,
+            accessSignature = SessionState.accessSignature
+        )
+    }
+
+    suspend fun finishSession(sessionId: String, accessSignature: String): Boolean {
+        if (sessionId.isBlank() || accessSignature.isBlank()) return false
+        val body = JSONObject()
+            .put("session_id", sessionId)
+            .put("access_signature", accessSignature)
+            .put("timestamp", System.currentTimeMillis())
+        return postJson("/session/finish", body) != null
+    }
+
+    suspend fun revokeSession(reason: String): Boolean {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+            .put("reason", reason)
+            .put("timestamp", System.currentTimeMillis())
+        return postJson("/admin/revoke", body) != null
+    }
+
+    suspend fun setProctorPin(pin: String): ProctorPinStatusResponse? {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+            .put("pin", pin.trim())
+        val response = postJson("/session/proctor-pin/set", body) ?: return null
+        return ProctorPinStatusResponse(
+            configured = response.optBoolean("ok", false),
+            effectiveDate = response.optString("effective_date").ifBlank { null },
+            isActiveToday = response.optBoolean("ok", false)
+        )
+    }
+
+    suspend fun getProctorPinStatus(): ProctorPinStatusResponse? {
+        val path = "/session/proctor-pin/status?session_id=${urlEncode(SessionState.sessionId)}&access_signature=${urlEncode(SessionState.accessSignature)}"
+        val response = getJson(path) ?: return null
+        return ProctorPinStatusResponse(
+            configured = response.optBoolean("configured", false),
+            effectiveDate = response.optString("effective_date").ifBlank { null },
+            isActiveToday = response.optBoolean("is_active_today", false)
+        )
+    }
+
+    suspend fun verifyProctorPin(pin: String): ProctorPinVerifyResponse? {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+            .put("pin", pin.trim())
+        val response = postJson("/session/proctor-pin/verify", body) ?: return null
+        return ProctorPinVerifyResponse(
+            valid = response.optBoolean("valid", false),
+            reason = response.optString("reason").ifBlank { null },
+            effectiveDate = response.optString("effective_date").ifBlank { null }
+        )
+    }
+
+    suspend fun ensureAdminControlSession(): Boolean {
+        val hasAuth = SessionState.sessionId.isNotBlank() && SessionState.accessSignature.isNotBlank()
+        if (hasAuth && SessionState.currentRole == UserRole.ADMIN) {
+            val status = getProctorPinStatus()
+            if (status != null) return true
+        }
+
+        val controlSession = createSessionBundle(
+            proctorId = TestConstants.ADMIN_TOKEN,
+            tokenTtlMinutes = TestConstants.DEFAULT_TOKEN_EXPIRY_MINUTES,
+            tokenCount = 1
+        ) ?: return false
+
+        val controlToken = controlSession.tokens.firstOrNull { it.startsWith("A-") }
+            ?: controlSession.tokens.firstOrNull()
+            ?: controlSession.token
+            ?: return false
+        val claim = claimSession(controlToken, roleHint = "admin") ?: return false
+
+        SessionState.startSession(
+            token = TestConstants.ADMIN_TOKEN,
+            role = UserRole.ADMIN,
+            sessionExpiresAtMillis = claim.tokenExpiresAtMillis,
+            serverSessionId = claim.sessionId,
+            signature = claim.accessSignature,
+            bindingId = claim.deviceBindingId
+        )
+        return true
+    }
+
+    private fun deviceBindingId(): String {
+        val prefs = context.getSharedPreferences(TestConstants.PREFS_NAME, Context.MODE_PRIVATE)
+        val existing = prefs.getString(TestConstants.PREF_DEVICE_BINDING_ID, null)
+        if (!existing.isNullOrBlank()) return existing
+        val created = UUID.randomUUID().toString()
+        prefs.edit().putString(TestConstants.PREF_DEVICE_BINDING_ID, created).apply()
+        return created
+    }
+
+    private fun normalizeBaseUrl(rawValue: String): String {
+        val normalized = TestUtils.normalizeUrl(rawValue).trimEnd('/')
+        return if (normalized.isBlank()) {
+            TestConstants.SERVER_BASE_URL
+        } else {
+            normalized
+        }
+    }
+
+    private fun urlEncode(value: String): String {
+        return URLEncoder.encode(value, Charsets.UTF_8.name())
+    }
+
+    private fun parseIsoMillis(raw: String): Long? {
+        return runCatching { Instant.parse(raw).toEpochMilli() }.getOrNull()
+    }
+}
+
+private fun JSONArray?.toStringList(): List<String> {
+    if (this == null) return emptyList()
+    val output = mutableListOf<String>()
+    for (i in 0 until length()) {
+        val value = optString(i).trim()
+        if (value.isNotBlank()) output.add(value)
+    }
+    return output
+}

@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/terminal_screen_bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            style="@style/Widget.Edufika.TextPrimary"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/whitelist_title"
+            android:textColor="@color/edufika_neon"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/terminal_panel"
+            android:orientation="vertical">
+
+            <EditText
+                android:id="@+id/whitelistInput"
+                style="@style/Widget.Edufika.TextPrimary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/terminal_input_bg"
+                android:hint="@string/manual_url_hint"
+                android:inputType="textUri"
+                android:textColorHint="@color/edufika_muted" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/addWhitelistButton"
+                style="@style/Widget.Edufika.Button"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/add_url" />
+
+            <EditText
+                android:id="@+id/proctorPinInput"
+                style="@style/Widget.Edufika.TextPrimary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/terminal_input_bg"
+                android:hint="@string/pin_hint"
+                android:inputType="numberPassword"
+                android:textColorHint="@color/edufika_muted" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/savePinButton"
+                style="@style/Widget.Edufika.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/submit" />
+
+            <TextView
+                android:id="@+id/proctorPinStatusText"
+                style="@style/Widget.Edufika.TextPrimary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/edufika_muted"
+                android:textSize="12sp" />
+
+            <TextView
+                style="@style/Widget.Edufika.TextPrimary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Daftar URL"
+                android:textColor="@color/edufika_neon"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/currentWhitelistText"
+                style="@style/Widget.Edufika.TextPrimary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/edufika_text"
+                android:textSize="13sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/backAdminButton"
+                style="@style/Widget.Edufika.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/cancel" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,26 @@
+{
+  "name": "edufika-rn",
+  "version": "0.1.0",
+  "main": "index.js",
+  "private": true,
+  "description": "React Native hybrid frontend screens for Edufika prototype.",
+  "scripts": {
+    "start": "metro start --config metro.config.js --port 8081",
+    "android": "react-native run-android",
+    "lint": "eslint .",
+    "assets:link": "npx react-native-asset"
+  },
+  "dependencies": {
+    "eslint": "^10.0.0",
+    "lint": "^0.8.19",
+    "react": "18.3.1",
+    "react-native": "0.76.1",
+    "react-native-vision-camera": "^4.6.3",
+    "react-native-webview": "^13.12.4"
+  },
+  "devDependencies": {
+    "@react-native-community/cli": "15.0.1",
+    "@react-native/babel-preset": "0.76.1",
+    "@react-native/metro-config": "0.76.1"
+  }
+}

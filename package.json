@@ -1,0 +1,25 @@
+{
+  "name": "edufika2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Edufika hybrid workspace (Android + React Native).",
+  "scripts": {
+    "android:assembleDebug": ".\\gradlew.bat :app:assembleDebug",
+    "android:compileKotlin": ".\\gradlew.bat :app:compileDebugKotlin",
+    "android:test": ".\\gradlew.bat :app:testDebugUnitTest",
+    "android:lint": ".\\gradlew.bat :app:lintDebug",
+    "rn:install": "npm --prefix react-native install",
+    "rn:start": "npm --prefix react-native run start",
+    "rn:android": "npm --prefix react-native run android",
+    "schema-admin:launch": ".\\launch-schema-admin.cmd"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "lint": "^0.8.19",
+    "mysql2": "^3.17.2",
+    "pino": "^10.3.1"
+  }
+}

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/terminal_screen_bg"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        style="@style/Widget.Edufika.TextPrimary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/exam_screen_title"
+        android:textColor="@color/edufika_neon"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/examUrlLabel"
+        style="@style/Widget.Edufika.TextPrimary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textColor="@color/edufika_muted"
+        android:textSize="12sp" />
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="10dp"
+        android:layout_weight="1">
+
+        <WebView
+            android:id="@+id/examWebView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/edufika_bg" />
+
+        <TextView
+            android:id="@+id/watermarkText"
+            style="@style/Widget.Edufika.TextPrimary"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_margin="8dp"
+            android:alpha="0.55"
+            android:background="@color/edufika_bg"
+            android:padding="6dp"
+            android:textColor="@color/edufika_neon"
+            android:textSize="11sp" />
+    </FrameLayout>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/exitExamButton"
+        style="@style/Widget.Edufika.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/exit_exam" />
+</LinearLayout>

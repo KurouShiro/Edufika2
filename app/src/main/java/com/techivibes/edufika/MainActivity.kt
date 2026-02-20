@@ -1,0 +1,263 @@
+package com.techivibes.edufika
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.WindowManager
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.os.bundleOf
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.navigation.NavController
+import androidx.navigation.NavOptions
+import androidx.navigation.fragment.NavHostFragment
+import com.techivibes.edufika.data.SessionLogger
+import com.techivibes.edufika.data.SessionState
+import com.techivibes.edufika.data.UserRole
+import com.techivibes.edufika.monitoring.FocusMonitor
+import com.techivibes.edufika.monitoring.HeartbeatService
+import com.techivibes.edufika.monitoring.IntegrityCheck
+import com.techivibes.edufika.security.BackgroundViolationTest
+import com.techivibes.edufika.security.RestartViolationTest
+import com.techivibes.edufika.security.ScreenLock
+import com.techivibes.edufika.security.ScreenOffReceiver
+import com.techivibes.edufika.security.ScreenOffViolationTest
+import com.techivibes.edufika.utils.TestConstants
+import com.techivibes.edufika.utils.TestUtils
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var navController: NavController
+    private lateinit var backgroundViolationTest: BackgroundViolationTest
+    private lateinit var screenOffViolationTest: ScreenOffViolationTest
+    private lateinit var focusMonitor: FocusMonitor
+    private lateinit var sessionLogger: SessionLogger
+    private var receiversRegistered = false
+    private val sessionExpiryHandler = Handler(Looper.getMainLooper())
+    private var expiryDialogShown = false
+
+    private val sessionExpiryRunnable = object : Runnable {
+        override fun run() {
+            if (SessionState.currentRole == UserRole.NONE) {
+                expiryDialogShown = false
+                sessionExpiryHandler.postDelayed(this, 1000L)
+                return
+            }
+
+            if (SessionState.isSessionExpired() && !expiryDialogShown) {
+                handleSessionExpired()
+                return
+            }
+            sessionExpiryHandler.postDelayed(this, 1000L)
+        }
+    }
+
+    private val sessionLockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val reason = intent?.getStringExtra(TestConstants.EXTRA_LOCK_REASON)
+                ?: "Server mengunci sesi karena heartbeat/risk."
+            handleViolation(reason)
+        }
+    }
+
+    private val heartbeatStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val message = intent?.getStringExtra(TestConstants.EXTRA_HEARTBEAT_MESSAGE) ?: return
+            sessionLogger.append("HEARTBEAT", message)
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE
+        )
+        setContentView(R.layout.activity_main)
+        sessionLogger = SessionLogger(this)
+
+        val navHost =
+            supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as NavHostFragment
+        navController = navHost.navController
+
+        focusMonitor = FocusMonitor(this) { event, detail ->
+            handleRiskEvent(event, detail)
+        }
+        focusMonitor.refreshSignals()
+        applyIntegrityBaseline()
+
+        val restartViolation = RestartViolationTest.checkAndMarkLaunch(this)
+        if (restartViolation) {
+            navigateViolation("RestartViolationTest: aplikasi restart saat sesi aktif.")
+        }
+
+        backgroundViolationTest = BackgroundViolationTest {
+            handleRiskEvent(
+                TestConstants.EVENT_APP_BACKGROUND,
+                "BackgroundViolationTest: aplikasi di-background saat ujian aktif."
+            )
+            handleViolation("BackgroundViolationTest: aplikasi di-background saat ujian aktif.")
+        }
+        ProcessLifecycleOwner.get().lifecycle.addObserver(backgroundViolationTest)
+
+        screenOffViolationTest = ScreenOffViolationTest(this) {
+            handleRiskEvent(
+                TestConstants.EVENT_FOCUS_LOST,
+                "ScreenOffViolationTest: layar mati saat ujian aktif."
+            )
+            handleViolation("ScreenOffViolationTest: layar mati saat ujian aktif.")
+        }
+        screenOffViolationTest.register()
+        registerInternalReceivers()
+        HeartbeatService.start(this)
+        resetKioskModeForNewLaunch()
+        startSessionExpiryWatcher()
+
+        if (isKioskModeEnabled()) {
+            ScreenLock.apply(this)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        focusMonitor.refreshSignals()
+        HeartbeatService.start(this)
+        startSessionExpiryWatcher()
+        if (isKioskModeEnabled()) {
+            ScreenLock.apply(this)
+        }
+    }
+
+    override fun onDestroy() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(backgroundViolationTest)
+        screenOffViolationTest.unregister()
+        unregisterInternalReceivers()
+        HeartbeatService.stop(this)
+        sessionExpiryHandler.removeCallbacks(sessionExpiryRunnable)
+        RestartViolationTest.markCleanExit(this, isFinishing)
+        super.onDestroy()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        focusMonitor.onWindowFocusChanged(hasFocus)
+    }
+
+    override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode)
+        focusMonitor.onMultiWindowModeChanged(isInMultiWindowMode)
+    }
+
+    private fun registerInternalReceivers() {
+        if (receiversRegistered) return
+        ContextCompat.registerReceiver(
+            this,
+            sessionLockReceiver,
+            IntentFilter(TestConstants.ACTION_SESSION_LOCKED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        ContextCompat.registerReceiver(
+            this,
+            heartbeatStatusReceiver,
+            IntentFilter(TestConstants.ACTION_HEARTBEAT_STATUS),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        receiversRegistered = true
+    }
+
+    private fun unregisterInternalReceivers() {
+        if (!receiversRegistered) return
+        runCatching { unregisterReceiver(sessionLockReceiver) }
+        runCatching { unregisterReceiver(heartbeatStatusReceiver) }
+        receiversRegistered = false
+    }
+
+    private fun applyIntegrityBaseline() {
+        val report = IntegrityCheck.evaluate()
+        if (report.rooted) {
+            handleRiskEvent(TestConstants.EVENT_OVERLAY_DETECTED, "IntegrityCheck: rooted device")
+        }
+        if (report.emulator) {
+            handleRiskEvent(TestConstants.EVENT_ACCESSIBILITY_ACTIVE, "IntegrityCheck: emulator device")
+        }
+        if (report.debugger) {
+            handleRiskEvent(TestConstants.EVENT_MEDIA_PROJECTION_ATTEMPT, "IntegrityCheck: debugger attached")
+        }
+        sessionLogger.append("INTEGRITY", report.details)
+    }
+
+    private fun startSessionExpiryWatcher() {
+        sessionExpiryHandler.removeCallbacks(sessionExpiryRunnable)
+        sessionExpiryHandler.post(sessionExpiryRunnable)
+    }
+
+    private fun handleSessionExpired() {
+        if (expiryDialogShown) return
+        expiryDialogShown = true
+        sessionLogger.append("SESSION", "Session token expired. App akan ditutup otomatis.")
+
+        AlertDialog.Builder(this)
+            .setTitle("Waktu Ujian Habis")
+            .setMessage("Session token telah kadaluarsa. Aplikasi akan keluar otomatis.")
+            .setCancelable(false)
+            .setPositiveButton("OK") { _, _ ->
+                SessionState.clear()
+                TestUtils.shutdownApp(this, disableKioskForCurrentRun = true)
+            }
+            .show()
+
+        sessionExpiryHandler.postDelayed({
+            if (!isFinishing) {
+                SessionState.clear()
+                TestUtils.shutdownApp(this, disableKioskForCurrentRun = true)
+            }
+        }, 2500L)
+    }
+
+    private fun handleRiskEvent(event: String, detail: String) {
+        if (!SessionState.isStudentSessionActive()) return
+        val score = SessionState.registerRiskEvent(event)
+        sessionLogger.append(event, "$detail | score=$score")
+        if (SessionState.riskLocked()) {
+            handleViolation("Risk score threshold exceeded: $score")
+        }
+    }
+
+    private fun handleViolation(message: String) {
+        if (!SessionState.isStudentSessionActive()) return
+        SessionState.registerRiskEvent(TestConstants.EVENT_REPEATED_VIOLATION)
+        sessionLogger.append("VIOLATION", message)
+        ScreenOffReceiver.triggerAlarm(this)
+        navigateViolation(message)
+    }
+
+    private fun navigateViolation(message: String) {
+        if (navController.currentDestination?.id == R.id.violationFragment) {
+            return
+        }
+        navController.navigate(
+            R.id.violationFragment,
+            bundleOf(TestConstants.ARG_VIOLATION_MESSAGE to message),
+            NavOptions.Builder().setLaunchSingleTop(true).build()
+        )
+    }
+
+    private fun isKioskModeEnabled(): Boolean {
+        return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE).getBoolean(
+            TestConstants.PREF_APP_LOCK_ENABLED,
+            true
+        )
+    }
+
+    private fun resetKioskModeForNewLaunch() {
+        getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(TestConstants.PREF_APP_LOCK_ENABLED, true)
+            .apply()
+    }
+}

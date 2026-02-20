@@ -1,0 +1,8 @@
+{
+  "name": "Edufika Prototype",
+  "description": "A high-security hybrid lockdown browser for school examinations featuring session token authorization, violation detection, and an administrative proctoring dashboard with a sleek neon-green terminal aesthetic.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

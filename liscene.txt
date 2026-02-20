@@ -1,0 +1,5 @@
+* Copyright (C) TechiVibes Systems - All Rights Reserved
+ * Unauthorized copying of this product (Edufika), via any medium is strictly prohibited
+ * Proprietary and confidential
+ * Written by George Shawn Mathew Mandagi (TechVibes), Febuary 2026
+ */

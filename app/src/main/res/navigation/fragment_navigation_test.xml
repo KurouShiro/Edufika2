@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/fragment_navigation_test"
+    app:startDestination="@id/loginTest">
+
+    <fragment
+        android:id="@+id/loginTest"
+        android:name="com.techivibes.edufika.ui.LoginTest"
+        android:label="LoginTest" />
+
+    <fragment
+        android:id="@+id/examFlowTest"
+        android:name="com.techivibes.edufika.ui.ExamFlowTest"
+        android:label="ExamFlowTest" />
+
+    <fragment
+        android:id="@+id/adminPanelTest"
+        android:name="com.techivibes.edufika.ui.AdminPanelTest"
+        android:label="AdminPanelTest" />
+
+    <fragment
+        android:id="@+id/urlWhitelist"
+        android:name="com.techivibes.edufika.ui.UrlWhitelist"
+        android:label="UrlWhitelist" />
+
+    <fragment
+        android:id="@+id/qrScanFragment"
+        android:name="com.techivibes.edufika.ui.QRScanFragment"
+        android:label="QRScanFragment" />
+
+    <fragment
+        android:id="@+id/developerAccessPanel"
+        android:name="com.techivibes.edufika.ui.DeveloperAccessPanel"
+        android:label="DeveloperAccessPanel" />
+
+    <fragment
+        android:id="@+id/examScreen"
+        android:name="com.techivibes.edufika.navigation.ExamScreen"
+        android:label="ExamScreen">
+        <argument
+            android:name="examUrl"
+            app:argType="string"
+            android:defaultValue="" />
+        <argument
+            android:name="developerBypass"
+            app:argType="boolean"
+            android:defaultValue="false" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/violationFragment"
+        android:name="com.techivibes.edufika.security.ViolationFragment"
+        android:label="ViolationFragment">
+        <argument
+            android:name="violationMessage"
+            app:argType="string"
+            android:defaultValue="Pelanggaran sistem terdeteksi." />
+    </fragment>
+</navigation>
