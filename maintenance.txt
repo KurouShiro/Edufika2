@@ -1,0 +1,311 @@
+﻿Edufika Maintenance Guide
+========================
+
+Purpose
+-------
+This file is the single operational guide for setup, configuration, debugging, and maintenance of the Edufika project.
+
+Project Scope
+-------------
+- Android app (Kotlin + Java)
+- React Native UI layer (in `react-native/`)
+- Session backend API (Node/TypeScript, in `edufika-session-api/`)
+- MariaDB + phpMyAdmin (Docker)
+
+Workspace Root
+--------------
+`C:\Users\MyBook Hype AMD\AndroidStudioProjects\Edufika2`
+
+
+1) Current Runtime Topology
+---------------------------
+- Android app: installed via Gradle (`:app:installDebug`)
+- Metro: `localhost:8081`
+- Backend API: `0.0.0.0:8091`
+- MariaDB host port: `3307` (container `3306`)
+- phpMyAdmin: `http://localhost:8089`
+
+Key files:
+- `docker-compose.yml`
+- `edufika-session-api/.env`
+- `backenddebug.txt`
+- `setup/*.bat`
+
+
+2) Prerequisites (Windows)
+--------------------------
+- Android Studio + SDK + Platform Tools
+- Node.js + npm
+- Docker Desktop
+- Java 11+ for Android Gradle Plugin
+- USB driver for your phone (if using USB)
+
+Optional but recommended:
+- PowerShell 7+
+- Git
+
+
+3) First-Time Setup (Clean Machine)
+-----------------------------------
+1. Open terminal in repo root.
+2. Install workspace dependencies:
+   - `npm install`
+   - `npm --prefix react-native install`
+   - `npm --prefix edufika-session-api install`
+3. Start DB containers:
+   - `docker compose up -d`
+4. Run backend migrations:
+   - `npm --prefix edufika-session-api run migrate`
+5. Start backend:
+   - `npm --prefix edufika-session-api run dev`
+6. Start Metro:
+   - `npm --prefix react-native run start`
+7. Install debug app:
+   - `.\gradlew.bat :app:installDebug`
+
+
+4) Day-to-Day Startup (Fast)
+----------------------------
+Minimal sequence:
+1. `docker compose up -d`
+2. `npm --prefix edufika-session-api run migrate`
+3. `npm --prefix edufika-session-api run dev`
+4. `npm --prefix react-native run start`
+5. `.\gradlew.bat :app:installDebug`
+
+If using the quick launchers in `setup/`:
+- `quick-debug-tabs.bat`
+- `quick-install-debug.bat`
+- `quick-metro.bat`
+- `quick-adb-reverse.bat`
+- `quick-usb-debug.bat`
+
+
+5) Backend Configuration Reference
+----------------------------------
+Active backend env (`edufika-session-api/.env`):
+- `HOST=0.0.0.0`
+- `PORT=8091`
+- `DB_DIALECT=mysql`
+- `DATABASE_URL=mysql://edufika:edufika@localhost:3307/edufika`
+- `ACCESS_SIGNATURE_TTL_SECONDS=300`
+- `HEARTBEAT_TIMEOUT_SECONDS=30`
+- `RISK_LOCK_THRESHOLD=12`
+- `REQUIRE_HTTPS=false` (development only)
+- `DEFAULT_WHITELIST=...`
+
+Do not keep dev secrets in production.
+
+
+6) Health and Connectivity Checks
+---------------------------------
+PC local check:
+- `curl.exe -i http://127.0.0.1:8091/health`
+
+LAN check (replace with your PC LAN IP):
+- `curl.exe -i http://<PC_LAN_IP>:8091/health`
+
+Phone browser check:
+- Open `http://<PC_LAN_IP>:8091/health`
+
+If phone cannot connect:
+- Ensure backend binds `0.0.0.0`
+- Ensure same WiFi subnet
+- Disable mobile data on phone during test
+- Add firewall rule for 8091
+
+
+7) App <-> Backend Linking (Developer Access)
+----------------------------------------------
+In app:
+1. Open Developer Access Panel.
+2. Set backend URL to exactly `http://<PC_LAN_IP>:8091`
+3. Save.
+4. Run backend connection test.
+
+Important:
+- Include `http://`
+- Use exact port `8091`
+
+
+8) USB Debugging Notes
+----------------------
+If `adb` is not recognized, use absolute path, e.g.:
+`"C:\Users\MyBook Hype AMD\AppData\Local\Android\Sdk\platform-tools\adb.exe" devices`
+
+Useful commands:
+- USB reverse Metro:
+  - `adb reverse tcp:8081 tcp:8081`
+- USB reverse backend:
+  - `adb reverse tcp:8091 tcp:8091`
+
+
+9) WiFi Debugging Notes
+-----------------------
+Workflow:
+1. Pair: `adb pair <PHONE_IP:PAIR_PORT>`
+2. Connect: `adb connect <PHONE_IP:CONNECT_PORT>`
+
+Pair port is not always connect port.
+Always use the current "Wireless debugging" connect endpoint shown on device.
+
+
+10) API Smoke Test
+------------------
+Use:
+- `npm --prefix edufika-session-api run smoke:phone`
+Or follow the manual sequence in `backenddebug.txt`.
+
+Validate these endpoints:
+- `POST /session/create`
+- `POST /session/claim`
+- `POST /session/whitelist/add`
+- `POST /session/whitelist/verify`
+- `POST /session/heartbeat`
+- `POST /session/proctor-pin/set`
+- `POST /session/proctor-pin/verify`
+- `POST /session/finish`
+
+
+11) Database Maintenance (MariaDB/phpMyAdmin)
+----------------------------------------------
+Open:
+- `http://localhost:8089`
+
+Default local credentials from compose:
+- user: `root`
+- pass: `rootpass`
+
+Core tables to inspect:
+- `exam_sessions`
+- `session_tokens`
+- `device_bindings`
+- `session_whitelist`
+- `heartbeats`
+- `violations`
+- `session_student_pin_templates`
+- `session_proctor_pins`
+
+Always run `USE edufika;` before queries.
+
+
+12) React Native UI Notes
+-------------------------
+- Active RN runtime is `react-native/`.
+- `new_design/` is a web (Vite/DOM) design source and not directly runnable in RN.
+- Current UI has been rewired to match that visual direction in RN components.
+- Old RN UI snapshot archive: `old-design.zip`.
+
+
+13) Build and Validation Commands
+---------------------------------
+Android/Kotlin:
+- `.\gradlew.bat :app:compileDebugKotlin`
+- `.\gradlew.bat :app:createBundleDebugJsAndAssets`
+- `.\gradlew.bat :app:installDebug`
+
+RN:
+- `npm --prefix react-native run start`
+- `npm --prefix react-native run android`
+- `npm --prefix react-native run lint`
+
+Backend:
+- `npm --prefix edufika-session-api run build`
+- `npm --prefix edufika-session-api run dev`
+- `npm --prefix edufika-session-api run migrate`
+
+
+14) ESLint Status
+-----------------
+RN lint requires an ESLint config file in `react-native/`:
+- `eslint.config.js` (ESLint v9+ format), or
+- compatible legacy setup if tooling supports it.
+
+If lint fails with "couldn't find eslint.config", add config first.
+
+
+15) Common Failures and Fixes
+-----------------------------
+A) `EADDRINUSE` on 8091
+- Port occupied. Find PID and kill:
+  - `netstat -ano | findstr :8091`
+  - `taskkill /PID <PID> /F`
+
+B) `EADDRINUSE` on 8081
+- Another Metro already running. Stop old process or use another port.
+
+C) `docker` not recognized
+- Install Docker Desktop and restart terminal.
+
+D) `adb` not recognized
+- Add platform-tools to PATH or use full adb path.
+
+E) App says "Backend tidak terjangkau"
+- Wrong URL scheme/host/port in app
+- Phone not on same network
+- Firewall blocking 8091
+
+F) Immediate session lock by heartbeat
+- Check risk configuration and telemetry events.
+- Confirm only security events are sent as violations.
+
+G) Whitelist rejected unexpectedly
+- Verify session/claim signature is current.
+- Verify URL in DB (`/viewform` vs `/edit` for Google Forms).
+
+
+16) Operational Maintenance Checklist
+-------------------------------------
+Daily:
+1. Confirm `docker ps` healthy.
+2. Confirm `/health` reachable from PC and phone.
+3. Run one token create/claim smoke flow.
+4. Confirm whitelist and heartbeat writes reach DB.
+
+Weekly:
+1. Backup MariaDB volume or SQL dump.
+2. Review violation logs and heartbeat anomalies.
+3. Update dependencies in a branch and re-run full validation.
+
+Before classroom exam:
+1. Start backend + DB + Metro 30 minutes early.
+2. Test with one admin token and one student token.
+3. Verify proctor PIN flow and session finish flow.
+4. Keep fallback USB cable and hotspot available.
+
+
+17) Backup and Restore
+----------------------
+Quick backup (example using container):
+- `docker exec edufika-mariadb mysqldump -uroot -prootpass edufika > edufika_backup.sql`
+
+Restore:
+- `docker exec -i edufika-mariadb mysql -uroot -prootpass edufika < edufika_backup.sql`
+
+
+18) Production Hardening TODO (When Releasing)
+----------------------------------------------
+- Move to HTTPS domain and set `REQUIRE_HTTPS=true`
+- Replace `JWT_SECRET` with strong secret management
+- Disable debug bypass paths
+- Add proper release signing for Android
+- Add monitoring and alerting for backend uptime
+- Use restricted DB credentials (not root for app operations)
+
+
+19) Canonical Reference Files
+-----------------------------
+- `prompts.txt` (product architecture and feature requirements)
+- `BUGNOTES.md` (active and resolved bug history)
+- `backenddebug.txt` (step-by-step backend debug commands)
+- `setup/` (quick command launchers)
+
+
+20) Change Management Rule
+--------------------------
+After major changes:
+1. Update `BUGNOTES.md` status.
+2. Update this `maintenance.txt` if commands, ports, or flow changed.
+3. Re-run compile/bundle checks.
+4. Re-test one complete session lifecycle end-to-end.
+
