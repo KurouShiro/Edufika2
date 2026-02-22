@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS device_bindings (
     role VARCHAR(32) NOT NULL DEFAULT 'student',
     device_fingerprint TEXT NOT NULL,
     ip_address TEXT,
+    device_name VARCHAR(128),
     signature_version INT NOT NULL DEFAULT 1,
     risk_score INT NOT NULL DEFAULT 0,
     locked BOOLEAN NOT NULL DEFAULT FALSE,
@@ -95,13 +96,17 @@ CREATE TABLE IF NOT EXISTS session_proctor_pins (
 );
 
 CREATE TABLE IF NOT EXISTS session_student_pin_templates (
-    exam_session_id CHAR(36) PRIMARY KEY,
+    exam_session_id CHAR(36) NOT NULL,
+    student_token VARCHAR(128) NOT NULL,
     pin_hash TEXT NOT NULL,
     effective_date DATE NOT NULL,
     updated_by_binding_id CHAR(36),
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (exam_session_id, student_token),
     CONSTRAINT fk_session_student_pin_templates_exam_session
-      FOREIGN KEY (exam_session_id) REFERENCES exam_sessions(id) ON DELETE CASCADE
+      FOREIGN KEY (exam_session_id) REFERENCES exam_sessions(id) ON DELETE CASCADE,
+    CONSTRAINT fk_session_student_pin_templates_student_token
+      FOREIGN KEY (student_token) REFERENCES session_tokens(token) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS session_cleanup_audit (
@@ -153,6 +158,9 @@ ON session_proctor_pins (exam_session_id, binding_id);
 
 CREATE INDEX idx_session_student_pin_templates_effective_date
 ON session_student_pin_templates (effective_date);
+
+CREATE INDEX idx_session_student_pin_templates_student_token
+ON session_student_pin_templates (student_token);
 
 CREATE INDEX idx_session_cleanup_audit_exam_session_id
 ON session_cleanup_audit (exam_session_id);

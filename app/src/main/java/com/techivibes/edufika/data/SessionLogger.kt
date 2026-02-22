@@ -29,7 +29,15 @@ class SessionLogger(private val context: Context) {
             SessionState.sessionId.isNotBlank()
         ) {
             ioScope.launch {
-                sessionClient.sendViolationEvent(eventType, detail, SessionState.riskScore)
+                val sent = sessionClient.sendViolationEvent(eventType, detail, SessionState.riskScore)
+                if (!sent) {
+                    OfflineTelemetryStore.enqueueEvent(
+                        context = context,
+                        eventType = eventType,
+                        detail = detail,
+                        riskScore = SessionState.riskScore
+                    )
+                }
             }
         }
     }
@@ -68,6 +76,9 @@ class SessionLogger(private val context: Context) {
             TestConstants.EVENT_OVERLAY_DETECTED,
             TestConstants.EVENT_ACCESSIBILITY_ACTIVE,
             TestConstants.EVENT_NETWORK_DROP,
+            TestConstants.EVENT_POWER_WARNING,
+            TestConstants.EVENT_RESTART_RECOVERY,
+            TestConstants.EVENT_OFFLINE_HEARTBEAT_SYNC,
             TestConstants.EVENT_REPEATED_VIOLATION,
             TestConstants.EVENT_MULTI_WINDOW,
             TestConstants.EVENT_FOCUS_LOST,

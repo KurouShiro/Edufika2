@@ -18,10 +18,12 @@ import androidx.navigation.NavOptions
 import androidx.navigation.fragment.NavHostFragment
 import com.techivibes.edufika.data.SessionLogger
 import com.techivibes.edufika.data.SessionState
+import com.techivibes.edufika.data.SessionStateStore
 import com.techivibes.edufika.data.UserRole
 import com.techivibes.edufika.monitoring.FocusMonitor
 import com.techivibes.edufika.monitoring.HeartbeatService
 import com.techivibes.edufika.monitoring.IntegrityCheck
+import com.techivibes.edufika.navigation.FragmentNavigationTest
 import com.techivibes.edufika.security.BackgroundViolationTest
 import com.techivibes.edufika.security.RestartViolationTest
 import com.techivibes.edufika.security.ScreenLock
@@ -68,7 +70,8 @@ class MainActivity : AppCompatActivity() {
     private val heartbeatStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val message = intent?.getStringExtra(TestConstants.EXTRA_HEARTBEAT_MESSAGE) ?: return
-            sessionLogger.append("HEARTBEAT", message)
+            val state = intent.getStringExtra(TestConstants.EXTRA_HEARTBEAT_STATE).orEmpty()
+            sessionLogger.append("HEARTBEAT", if (state.isBlank()) message else "$message | state=$state")
         }
     }
 
@@ -84,6 +87,7 @@ class MainActivity : AppCompatActivity() {
         val navHost =
             supportFragmentManager.findFragmentById(R.id.nav_host_fragment) as NavHostFragment
         navController = navHost.navController
+        SessionStateStore.restore()
 
         focusMonitor = FocusMonitor(this) { event, detail ->
             handleRiskEvent(event, detail)
@@ -93,8 +97,10 @@ class MainActivity : AppCompatActivity() {
 
         val restartViolation = RestartViolationTest.checkAndMarkLaunch(this)
         if (restartViolation) {
-            navigateViolation("RestartViolationTest: aplikasi restart saat sesi aktif.")
+            SessionStateStore.markRecoveryPending("APP_RESTART")
+            sessionLogger.append("RECOVERY", "Aplikasi restart terdeteksi, menjalankan mode pemulihan sesi.")
         }
+        restoreRecoveredSessionUi()
 
         backgroundViolationTest = BackgroundViolationTest {
             handleRiskEvent(
@@ -259,5 +265,26 @@ class MainActivity : AppCompatActivity() {
             .edit()
             .putBoolean(TestConstants.PREF_APP_LOCK_ENABLED, true)
             .apply()
+    }
+
+    private fun restoreRecoveredSessionUi() {
+        if (SessionState.currentRole != UserRole.STUDENT || SessionState.isSessionExpired()) {
+            return
+        }
+
+        val recoveryReason = SessionStateStore.consumePendingRecoveryReason()
+        if (!recoveryReason.isNullOrBlank()) {
+            sessionLogger.append(
+                TestConstants.EVENT_RESTART_RECOVERY,
+                "Pemulihan sesi setelah restart/boot: $recoveryReason"
+            )
+        }
+
+        val resumeUrl = SessionState.currentExamUrl
+        if (resumeUrl.isNotBlank()) {
+            FragmentNavigationTest.openExam(navController, resumeUrl)
+        } else {
+            navController.navigate(R.id.examFlowTest)
+        }
     }
 }

@@ -12,6 +12,7 @@ export const claimSessionBodySchema = z.object({
   token: z.string().trim().min(1),
   device_fingerprint: z.string().trim().min(1).optional(),
   device_binding_id: z.string().trim().min(1).optional(),
+  device_name: z.string().trim().min(1).max(128).optional(),
   role_hint: z.enum(["student", "admin", "developer"]).optional(),
 });
 
@@ -24,12 +25,22 @@ export const heartbeatBodySchema = z.object({
   network_state: z.string().trim().optional(),
   device_state: z.string().trim().optional(),
   timestamp: z.number().int(),
+  heartbeat_seq: z.number().int().optional(),
   risk_score: z.number().int().optional(),
   overlay_detected: z.boolean().optional(),
   accessibility_active: z.boolean().optional(),
   debug_detected: z.boolean().optional(),
   emulator_detected: z.boolean().optional(),
   rooted: z.boolean().optional(),
+});
+
+export const reconnectBodySchema = z.object({
+  session_id: z.string().trim().min(1),
+  device_binding_id: z.string().trim().min(1),
+  token: z.string().trim().min(1).optional(),
+  device_fingerprint: z.string().trim().min(1).optional(),
+  access_signature: z.string().trim().min(1).optional(),
+  reason: z.string().trim().min(1).optional(),
 });
 
 export const eventBodySchema = z.object({
@@ -54,6 +65,7 @@ export const proctorPinSetBodySchema = z.object({
   session_id: z.string().trim().min(1),
   access_signature: z.string().trim().min(1),
   pin: z.string().trim().min(4).max(32),
+  student_token: z.string().trim().min(1).optional(),
 });
 
 export const proctorPinVerifyBodySchema = z.object({
@@ -65,6 +77,7 @@ export const proctorPinVerifyBodySchema = z.object({
 export const proctorPinStatusQuerySchema = z.object({
   session_id: z.string().trim().min(1),
   access_signature: z.string().trim().min(1),
+  student_token: z.string().trim().min(1).optional(),
 });
 
 export const finishSessionBodySchema = z.object({
@@ -98,6 +111,7 @@ export const launchUpdateBodySchema = z.object({
 export type CreateSessionBody = z.infer<typeof createSessionBodySchema>;
 export type ClaimSessionBody = z.infer<typeof claimSessionBodySchema>;
 export type HeartbeatBody = z.infer<typeof heartbeatBodySchema>;
+export type ReconnectBody = z.infer<typeof reconnectBodySchema>;
 export type EventBody = z.infer<typeof eventBodySchema>;
 export type WhitelistAddBody = z.infer<typeof whitelistAddBodySchema>;
 export type ProctorPinSetBody = z.infer<typeof proctorPinSetBodySchema>;

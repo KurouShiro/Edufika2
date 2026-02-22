@@ -46,6 +46,17 @@
                 android:text="@string/add_url" />
 
             <EditText
+                android:id="@+id/studentTokenInput"
+                style="@style/Widget.Edufika.TextPrimary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/terminal_input_bg"
+                android:hint="@string/student_token_hint"
+                android:inputType="text"
+                android:textColorHint="@color/edufika_muted" />
+
+            <EditText
                 android:id="@+id/proctorPinInput"
                 style="@style/Widget.Edufika.TextPrimary"
                 android:layout_width="match_parent"

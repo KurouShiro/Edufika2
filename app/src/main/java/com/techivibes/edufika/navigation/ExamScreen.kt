@@ -101,6 +101,7 @@ class ExamScreen : Fragment(R.layout.fragment_exam_screen) {
         developerBypass: Boolean,
         urlLabel: TextView
     ) {
+        SessionState.setCurrentExamUrl(examUrl)
         val webView = examWebView ?: return
         val settings = webView.settings
 

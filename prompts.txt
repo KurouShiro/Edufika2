@@ -58,6 +58,9 @@ Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aks
 * **Session expiry enforcement (popup + auto shutdown saat token kadaluarsa)**
 * **SessionLogger -> logger.txt (log lokal untuk audit device-side)**
 * **Proctor PIN verification via backend API (validitas harian)**
+* **Proctor PIN assignment wajib memilih `student_token (S-...)` agar PIN benar-benar terikat per sesi siswa**
+* **SessionClient menyimpan detail HTTP error backend (bukan hanya `server unavailable`) untuk debugging yang lebih presisi**
+* **Admin control session otomatis refresh signature melalui `/session/reconnect` saat signature lama kedaluwarsa**
 * **SessionClient health-check endpoint (`/health`) untuk validasi koneksi backend**
 * **DeveloperAccessPanel mendukung konfigurasi backend LAN URL untuk WiFi debugging (`http://<PC_IP>:8091`)**
 
@@ -85,10 +88,17 @@ Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aks
 * **IntegrityWarningModal.tsx (Peringatan otomatis jika perilaku mencurigakan)**
 * **LoginScreen.tsx (Exit button tersedia sebelum login untuk shutdown app terkontrol)**
 * **Settings.tsx (Localization aktif: Bahasa Indonesia dan English benar-benar diterapkan ke UI)**
-* **Keypad.tsx (Dukungan huruf kecil/kapital untuk input token dan password)**
+* **Keypad.tsx (Dukungan huruf kecil/kapital + tombol dash `-` + copy/paste input token/password)**
 * **AdminDashboardPanel.tsx (Token expiry input + copy token + submit Proctor PIN policy)**
+* **AdminDashboardPanel.tsx (Monitor tab: pause/resume/reissue signature controls terhubung ke backend)**
+* **AdminDashboardPanel.tsx (Monitor tab: daftar token + status + IP + nama perangkat)**
+* **AdminDashboardPanel.tsx (Token URL binding sinkron ke backend whitelist + backend launch URL)**
 * **DeveloperAccessScreen.tsx (Generate admin token + expiry + copy)**
+* **DeveloperAccessScreen.tsx (Scrollable penuh + input backend URL + tes koneksi backend + base URL persisten lintas sesi)**
 * **ExamBrowserScreen.tsx (Token countdown timer + expiry popup + auto exit)**
+* **Token URL binding di RN sinkron ke backend (/session/whitelist/add) dan launch URL (/exam/launch) agar whitelist konsisten antar client**
+* **ExamBrowserScreen.tsx (Whitelist host-family aware untuk redirect Google host family)**
+* **App.tsx (Validasi whitelist menyertakan fallback token-bound URL + log `bound URL`)**
 * **Admin dashboard layout scrollable penuh untuk layar kecil + logout button selalu dapat diakses**
 
 ---
@@ -175,6 +185,8 @@ Exam Session Token
 - Access Signature Rotasi Setiap Â±5 Menit
 - Heartbeat wajib setiap 5â€“10 detik
 - Risiko dihitung server
+- Proktor dapat pause/resume session secara live
+- Proktor dapat reissue signature siswa tanpa membuat token baru
 - Server dapat mengakhiri sesi kapan saja
 
 ---
@@ -199,30 +211,40 @@ Bukan sekadar authentication server.
 * Proctor PIN policy bersifat **session-scoped**: template di `session_student_pin_templates`, lalu dibinding ke `binding_id` siswa di `session_proctor_pins`
 * Mengelola token pair per exam session: satu `S-*` (student) dan satu `A-*` (admin/proctor)
 * Mengirim metadata expiry token ke client untuk countdown/enforcement
+* Mendukung reconnect signature (`/session/reconnect`) untuk recovery signature/admin control tanpa membuat sesi baru
+* Menyediakan kontrol sesi live dari proktor: pause/resume/reissue signature/revoke student
+* Menyediakan endpoint monitor token realtime (status online/offline/revoked/expired + ip/device)
 * Fokus pada session authority + launch URL host pihak ketiga (tanpa menyimpan bank soal lokal)
 * Mencatat seluruh aktivitas audit
 * Auto-archive + cleanup sesi selesai/revoke ke `session_cleanup_audit`
 * Live revoke session oleh proktor
+* Siap dikontainerisasi untuk deployment (`Dockerfile` + `docker-compose.yml`)
 
 ---
 
 ## Endpoint Utama API
 
-POST /session/create Ã¢â€ â€™ Proktor membuat sesi
-POST /session/claim Ã¢â€ â€™ Siswa masuk ujian
-POST /session/heartbeat Ã¢â€ â€™ Validasi liveness
-POST /session/event Ã¢â€ â€™ Kirim violation log
-POST /session/finish Ã¢â€ â€™ Akhiri ujian
-POST /admin/revoke Ã¢â€ â€™ Paksa berhenti sesi
-GET /session/whitelist Ã¢â€ â€™ Ambil whitelist aktif dari server
-POST /session/whitelist/add Ã¢â€ â€™ Tambah URL whitelist (server authoritative)
-POST /session/whitelist/verify Ã¢â€ â€™ Validasi URL terhadap whitelist server
-GET /exam/launch Ã¢â€ â€™ Ambil launch URL browser exam
-POST /exam/launch Ã¢â€ â€™ Update launch URL (admin/developer only)
-POST /session/proctor-pin/set Ã¢â€ â€™ Simpan PIN proktor (refresh harian)
-POST /session/proctor-pin/verify Ã¢â€ â€™ Verifikasi PIN proktor saat exit exam
-GET /session/proctor-pin/status Ã¢â€ â€™ Cek status PIN proktor hari ini
-GET /health Ã¢â€ â€™ Tes koneksi backend dari client (DeveloperAccess/Admin)
+POST /session/create -> Proktor membuat sesi
+POST /session/claim -> Siswa masuk ujian
+POST /session/heartbeat -> Validasi liveness
+POST /session/reconnect -> Refresh signature & recover binding/session state
+POST /session/event -> Kirim violation log
+POST /session/finish -> Akhiri ujian
+POST /admin/revoke -> Paksa berhenti sesi
+POST /admin/revoke-student -> Revoke paksa token siswa tertentu
+POST /admin/pause -> Pause exam session
+POST /admin/resume -> Resume exam session
+POST /admin/reissue-signature -> Reissue access signature binding siswa
+GET /admin/monitor -> Live monitor token status + device metadata
+GET /session/whitelist -> Ambil whitelist aktif dari server
+POST /session/whitelist/add -> Tambah URL whitelist (server authoritative)
+POST /session/whitelist/verify -> Validasi URL terhadap whitelist server
+GET /exam/launch -> Ambil launch URL browser exam
+POST /exam/launch -> Update launch URL (admin/developer only)
+POST /session/proctor-pin/set -> Simpan PIN proktor (refresh harian)
+POST /session/proctor-pin/verify -> Verifikasi PIN proktor saat exit exam
+GET /session/proctor-pin/status -> Cek status PIN proktor hari ini
+GET /health -> Tes koneksi backend dari client (DeveloperAccess/Admin)
 
 ---
 
@@ -233,12 +255,16 @@ App mengirim status:
 {
 focus: true,
 multi_window: false,
+network_state: stable,
 device_state: normal,
+heartbeat_seq: n,
 timestamp: xxx
 }
 
 Jika heartbeat berhenti >30 detik:
 Session otomatis dikunci server.
+Jika proktor pause session:
+heartbeat tetap tercatat tetapi status sesi `PAUSED` sampai proktor resume.
 
 ---
 
@@ -320,19 +346,24 @@ app/src/main/java/com/techivibes/edufika/
 |-- monitoring/
 |   |-- HeartbeatService.kt
 |   |-- FocusMonitor.kt
-|   `-- IntegrityCheck.kt
+|   |-- IntegrityCheck.kt
+|   `-- PreExamChecks.kt
 |-- backend/
 |   `-- SessionClient.kt
 `-- data/
     |-- TokenRegistry.kt
-    `-- SessionLogger.kt
+    |-- SessionLogger.kt
+    |-- SessionStateStore.kt
+    `-- OfflineTelemetryStore.kt
 
 edufika-session-api/
 |-- src/db/pool.ts
 |-- src/db/runMigrations.ts
 |-- src/db/migrations/mysql/001_init.sql
-|-- src/db/migrations/005_session_scope_and_cleanup.sql
-|-- src/db/migrations/006_student_pin_template.sql
+|-- src/db/migrations/mysql/002_student_pin_templates_per_token.sql
+|-- src/db/migrations/mysql/003_add_device_name.sql
+|-- Dockerfile
+|-- .dockerignore
 |-- docker-compose.yml
 |-- .env
 |-- .env.example
@@ -364,6 +395,8 @@ app/src/main/java/com/techivibes/edufika/
 |   |-- TestConstants.kt
 |   |-- DeviceCompatibility.kt
 |   `-- TestUtils.kt
+|-- recovery/
+|   `-- BootRecoveryReceiver.kt
 `-- runners/
     `-- CustomTestRunner.kt
 ```
@@ -403,6 +436,13 @@ npm.cmd --prefix edufika-session-api run migrate
 ```powershell
 cd edufika-session-api
 npm run dev
+```
+
+3b. Optional: run backend API in Docker container (instead of `npm run dev`):
+```powershell
+cd edufika-session-api
+docker build -t edufika-session-api:latest .
+docker run --rm -p 8091:8091 --env-file .env edufika-session-api:latest
 ```
 
 4. Start Metro:

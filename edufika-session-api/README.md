@@ -83,8 +83,13 @@ Then set Android app `Server API URL` to:
 - `GET /session/whitelist`
 - `POST /session/whitelist/add`
 - `POST /session/whitelist/verify`
+- `POST /session/proctor-pin/set`
+- `POST /session/proctor-pin/verify`
+- `GET /session/proctor-pin/status`
 - `POST /session/finish`
 - `POST /admin/revoke`
+- `POST /admin/revoke-student`
+- `GET /admin/monitor`
 - `GET /exam/launch`
 - `POST /exam/launch`
 
@@ -97,6 +102,9 @@ Then set Android app `Server API URL` to:
 - `A-...` for admin/proctor
 
 Each `exam_session_id` keeps one active token per role (`student`, `admin`).
+
+`POST /session/proctor-pin/set` supports optional:
+- `student_token` (recommended, pins policy to that student token only)
 
 ## WebSocket
 

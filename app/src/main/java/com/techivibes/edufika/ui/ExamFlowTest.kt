@@ -11,6 +11,7 @@ import com.techivibes.edufika.R
 import com.techivibes.edufika.backend.SessionClient
 import com.techivibes.edufika.data.SessionLogger
 import com.techivibes.edufika.data.SessionState
+import com.techivibes.edufika.monitoring.PreExamChecks
 import com.techivibes.edufika.navigation.FragmentNavigationTest
 import com.techivibes.edufika.utils.TestConstants
 import com.techivibes.edufika.utils.TestUtils
@@ -31,6 +32,31 @@ class ExamFlowTest : Fragment(R.layout.fragment_exam_flow_test) {
             val manualUrl = TestUtils.extractExamUrl(examUrlInput.text.toString())
 
             lifecycleScope.launch {
+                val readiness = PreExamChecks.evaluate(requireContext())
+                if (readiness.isBlocking) {
+                    SessionLogger(requireContext()).append("PRECHECK", readiness.message)
+                    TestUtils.showToast(requireContext(), readiness.message)
+                    return@launch
+                }
+                if (readiness.message != "Pre-check OK") {
+                    SessionLogger(requireContext()).append("PRECHECK", readiness.message)
+                }
+
+                val pingStart = System.currentTimeMillis()
+                val backendHealthy = sessionClient.pingHealth()
+                val pingLatency = System.currentTimeMillis() - pingStart
+                if (!backendHealthy) {
+                    SessionLogger(requireContext()).append("PRECHECK", "Backend tidak terjangkau saat pre-check.")
+                    TestUtils.showToast(requireContext(), "Backend tidak terjangkau.")
+                    return@launch
+                }
+                if (pingLatency > 3000L) {
+                    SessionLogger(requireContext()).append(
+                        "PRECHECK",
+                        "Latensi backend tinggi (${pingLatency}ms), lanjut dengan monitoring ketat."
+                    )
+                }
+
                 val serverWhitelist = sessionClient.fetchWhitelist()
                 if (serverWhitelist == null) {
                     TestUtils.showToast(requireContext(), "Whitelist server tidak terjangkau.")
@@ -80,6 +106,7 @@ class ExamFlowTest : Fragment(R.layout.fragment_exam_flow_test) {
                     "EXAM",
                     "Siswa membuka URL ujian ($source): $targetUrl"
                 )
+                SessionState.setCurrentExamUrl(targetUrl)
                 FragmentNavigationTest.openExam(findNavController(), targetUrl)
             }
         }

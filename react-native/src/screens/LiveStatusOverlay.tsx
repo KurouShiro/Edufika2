@@ -1,6 +1,5 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { palette } from "./Layout";
 
 type LiveStatusOverlayProps = {
   studentId: string;
@@ -17,9 +16,9 @@ export default function LiveStatusOverlay({
 }: LiveStatusOverlayProps) {
   return (
     <View pointerEvents="none" style={styles.container}>
-      <Text style={styles.text}>ID:{studentId}</Text>
-      <Text style={styles.text}>SESSION:{sessionId}</Text>
-      <Text style={styles.text}>RISK:{riskScore}</Text>
+      <Text style={styles.text}>{`ID:${studentId}`}</Text>
+      <Text style={styles.text}>{`SID:${sessionId}`}</Text>
+      <Text style={styles.text}>{`RISK:${riskScore}`}</Text>
       <Text style={styles.text}>{timestamp}</Text>
     </View>
   );
@@ -31,15 +30,15 @@ const styles = StyleSheet.create({
     top: 10,
     right: 10,
     borderWidth: 1,
-    borderColor: "rgba(57,255,20,0.32)",
-    borderRadius: 0,
-    backgroundColor: "rgba(5,5,5,0.76)",
+    borderColor: "rgba(255,255,255,0.24)",
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.52)",
     paddingHorizontal: 8,
     paddingVertical: 6,
-    maxWidth: 185,
+    maxWidth: 190,
   },
   text: {
-    color: palette.neon,
+    color: "#86efac",
     fontSize: 9,
     lineHeight: 13,
     fontFamily: "JetBrainsMono-Regular",

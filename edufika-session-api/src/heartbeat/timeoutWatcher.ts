@@ -6,13 +6,42 @@ export function startHeartbeatTimeoutWatcher(service: SessionService, wsHub: WsH
   const intervalMs = config.heartbeatWatchIntervalSeconds * 1000;
   const timer = setInterval(async () => {
     try {
-      const locked = await service.lockTimedOutSessions();
-      for (const item of locked) {
-        wsHub.broadcast("session_locked", {
-          session_id: item.sessionId,
-          binding_id: item.bindingId,
-          reason: item.reason,
-        });
+      const transitions = await service.lockTimedOutSessions();
+      for (const item of transitions) {
+        if (item.state === "LOCKED") {
+          wsHub.broadcast("session_locked", {
+            session_id: item.sessionId,
+            binding_id: item.bindingId,
+            reason: item.reason,
+          });
+          continue;
+        }
+
+        if (item.state === "DEGRADED") {
+          wsHub.broadcast("session_degraded", {
+            session_id: item.sessionId,
+            binding_id: item.bindingId,
+            reason: item.reason,
+          });
+          continue;
+        }
+
+        if (item.state === "SUSPENDED") {
+          wsHub.broadcast("session_suspended", {
+            session_id: item.sessionId,
+            binding_id: item.bindingId,
+            reason: item.reason,
+          });
+          continue;
+        }
+
+        if (item.state === "IN_PROGRESS") {
+          wsHub.broadcast("session_recovered", {
+            session_id: item.sessionId,
+            binding_id: item.bindingId,
+            reason: item.reason,
+          });
+        }
       }
 
       const archived = await service.archiveAndCleanupEndedSessions();

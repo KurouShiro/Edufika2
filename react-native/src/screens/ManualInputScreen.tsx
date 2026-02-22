@@ -1,7 +1,7 @@
 import React from "react";
-import { Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
-import Layout, { TerminalButton, TerminalInput, terminalStyles } from "./Layout";
+import Layout, { TerminalButton, TerminalInput, palette } from "./Layout";
 
 type ManualInputScreenProps = {
   language: AppLanguage;
@@ -20,31 +20,55 @@ export default function ManualInputScreen({
 }: ManualInputScreenProps) {
   return (
     <Layout
-      title={tr(language, "Endpoint Tujuan", "Target Endpoint")}
-      subtitle={tr(
-        language,
-        "Masukkan URL ujian valid dari protokol registry yang diizinkan.",
-        "Input a valid exam URL from authorized registry protocol."
-      )}
+      title={tr(language, "Launch URL", "Launch URL")}
+      subtitle={tr(language, "Masukkan endpoint ujian yang valid.", "Enter a valid exam endpoint.")}
     >
-      <View style={terminalStyles.card}>
+      <View style={styles.card}>
         <TerminalInput
           value={urlInput}
           onChangeText={onUrlInputChange}
-          label={tr(language, "URL Protokol Registry", "Registry Protocol URL")}
-          placeholder="https://exam.school.edu/session"
+          label={tr(language, "Endpoint URL", "Endpoint URL")}
+          placeholder="https://forms.google.com/..."
           autoCapitalize="none"
+          autoCorrect={false}
         />
-        <TerminalButton label={tr(language, "Jalankan Endpoint", "Deploy Engine")} onPress={onValidate} />
+        <TerminalButton label={tr(language, "Masuk Ruang Ujian", "Enter Exam Room")} onPress={onValidate} />
         <TerminalButton label={tr(language, "Kembali", "Back")} variant="outline" onPress={onBack} />
       </View>
 
-      <Text style={terminalStyles.subtleText}>
-        {tr(language, "Hanya domain whitelist yang dapat dimuat di browser ujian.", "Only whitelisted domains can be loaded into exam browser.")}
-      </Text>
-      <Text style={terminalStyles.subtleText}>
-        {tr(language, "Hostname atau protokol tidak valid langsung memblokir awal sesi.", "Invalid hostname or protocol immediately blocks session startup.")}
-      </Text>
+      <View style={styles.note}>
+        <Text style={styles.noteText}>
+          {tr(
+            language,
+            "Hanya domain pada whitelist server yang akan diterima oleh kebijakan keamanan.",
+            "Only server-whitelisted domains will be accepted by security policy."
+          )}
+        </Text>
+      </View>
     </Layout>
   );
 }
+
+const styles = StyleSheet.create({
+  card: {
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 24,
+    padding: 12,
+    backgroundColor: "#ffffff",
+    marginBottom: 10,
+  },
+  note: {
+    borderWidth: 1,
+    borderColor: "rgba(34,197,94,0.2)",
+    backgroundColor: "rgba(34,197,94,0.08)",
+    borderRadius: 16,
+    padding: 10,
+  },
+  noteText: {
+    color: "#4b5563",
+    fontFamily: "JetBrainsMono-Regular",
+    fontSize: 10,
+    lineHeight: 14,
+  },
+});

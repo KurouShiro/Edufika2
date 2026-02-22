@@ -91,6 +91,38 @@
                 android:text="@string/open_whitelist" />
 
             <com.google.android.material.button.MaterialButton
+                android:id="@+id/pauseSessionButton"
+                style="@style/Widget.Edufika.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/pause_session" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/resumeSessionButton"
+                style="@style/Widget.Edufika.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/resume_session" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/reissueSignatureButton"
+                style="@style/Widget.Edufika.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/reissue_signature" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/revokeSessionButton"
+                style="@style/Widget.Edufika.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/revoke_session" />
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/adminLogoutButton"
                 style="@style/Widget.Edufika.OutlinedButton"
                 android:layout_width="match_parent"

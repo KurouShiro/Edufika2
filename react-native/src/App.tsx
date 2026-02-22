@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Alert, BackHandler, Clipboard } from "react-native";
 import { AppLanguage, tr } from "./i18n";
-import AdminDashboardPanel from "./screens/AdminDashboardPanel";
+import AdminDashboardPanel, { AdminTokenMonitorItem } from "./screens/AdminDashboardPanel";
 import DeveloperAccessScreen from "./screens/DeveloperAccessScreen";
 import ExamBrowserScreen from "./screens/ExamBrowserScreen";
 import ExamSelectionScreen from "./screens/ExamSelectionScreen";
@@ -34,17 +34,38 @@ type ScreenId =
 
 type Role = "guest" | "student" | "admin" | "developer";
 type IssuedTokenRole = "student" | "admin";
+type IssuedTokenStatus = "issued" | "online" | "offline" | "revoked" | "expired";
 
 type IssuedToken = {
   token: string;
   role: IssuedTokenRole;
   expiresAt: number;
   source: string;
+  status: IssuedTokenStatus;
+  ipAddress: string;
+  deviceName: string;
+  lastSeenAt: number;
+  revokedReason?: string;
 };
 
 type TokenPinPolicy = {
   pin: string;
   effectiveDate: string;
+};
+
+type TokenLaunchPolicy = {
+  url: string;
+  updatedAt: string;
+};
+
+type BackendMonitorToken = {
+  token: string;
+  role: "student" | "admin";
+  status: IssuedTokenStatus;
+  ipAddress?: string | null;
+  deviceName?: string | null;
+  expiresAt?: string | null;
+  lastSeenAt?: string | null;
 };
 
 const STUDENT_TOKEN = "StudentID";
@@ -53,9 +74,10 @@ const DEVELOPER_PASSWORD = "EDU_DEV_ACCESS";
 const DEFAULT_SESSION_EXPIRY_MINUTES = 120;
 
 const defaultWhitelist = ["https://example.org", "https://school.ac.id/exam"];
+const DEFAULT_BACKEND_BASE_URL = "http://localhost:8091";
 
-function normalizeUrl(raw: string): string {
-  const input = raw.trim();
+function normalizeUrl(raw: unknown): string {
+  const input = typeof raw === "string" ? raw.trim() : "";
   if (!input) {
     return "";
   }
@@ -65,19 +87,158 @@ function normalizeUrl(raw: string): string {
   return `https://${input}`;
 }
 
+function normalizeBackendBaseUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withProtocol = trimmed.startsWith("http://") || trimmed.startsWith("https://")
+    ? trimmed
+    : `http://${trimmed}`;
+  return withProtocol.replace(/\/+$/, "");
+}
+
+type ParsedUrl = {
+  scheme: string;
+  host: string;
+  path: string;
+};
+
+function toParsedUrl(raw: unknown): ParsedUrl | null {
+  const normalized = normalizeUrl(raw);
+  if (!normalized) {
+    return null;
+  }
+  const match = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]+)([^?#]*)/i.exec(normalized);
+  if (!match) {
+    return null;
+  }
+  return {
+    scheme: `${match[1].toLowerCase()}:`,
+    host: match[2].toLowerCase(),
+    path: match[3]?.length ? match[3] : "/",
+  };
+}
+
+function hostWithoutPort(host: string): string {
+  const normalized = host.toLowerCase().trim();
+  const lastColon = normalized.lastIndexOf(":");
+  if (lastColon <= 0) {
+    return normalized;
+  }
+  const portCandidate = normalized.slice(lastColon + 1);
+  if (!/^\d+$/.test(portCandidate)) {
+    return normalized;
+  }
+  return normalized.slice(0, lastColon);
+}
+
+function normalizeHostForCompare(host: string): string {
+  const normalized = hostWithoutPort(host);
+  return normalized.startsWith("www.") ? normalized.slice(4) : normalized;
+}
+
+function hostMatchesOrSubdomain(targetHost: string, allowedHost: string): boolean {
+  const normalizedTarget = normalizeHostForCompare(targetHost);
+  const normalizedAllowed = normalizeHostForCompare(allowedHost);
+  return (
+    normalizedTarget === normalizedAllowed ||
+    normalizedTarget.endsWith(`.${normalizedAllowed}`)
+  );
+}
+
+function normalizePathPrefix(pathname: string): string {
+  if (!pathname || pathname === "/") {
+    return "/";
+  }
+  return pathname.endsWith("/") ? pathname : `${pathname}/`;
+}
+
+function mergeWhitelist(base: string[], tokenBoundUrl?: string): string[] {
+  const combined = tokenBoundUrl ? [...base, tokenBoundUrl] : [...base];
+  return Array.from(
+    new Set(
+      combined
+        .map((entry) => normalizeUrl(entry))
+        .filter((entry) => entry.length > 0)
+    )
+  );
+}
+
+function getTokenLaunchUrl(
+  tokenPolicies: Record<string, TokenLaunchPolicy>,
+  rawToken: string
+): string | undefined {
+  const normalizedToken = rawToken.trim().toUpperCase();
+  if (!normalizedToken) {
+    return undefined;
+  }
+  const direct = tokenPolicies[normalizedToken]?.url;
+  if (direct) {
+    return direct;
+  }
+
+  const fallbackKey = Object.keys(tokenPolicies).find(
+    (key) => key.trim().toUpperCase() === normalizedToken
+  );
+  return fallbackKey ? tokenPolicies[fallbackKey]?.url : undefined;
+}
+
 function isWhitelisted(url: string, whitelist: string[]): boolean {
-  try {
-    const target = new URL(url);
-    return whitelist.some((allowed) => {
-      const normalizedAllowed = normalizeUrl(allowed);
-      const allowedUrl = new URL(normalizedAllowed);
-      const sameHost = target.host.toLowerCase() === allowedUrl.host.toLowerCase();
-      const samePrefix = url.startsWith(normalizedAllowed);
-      return sameHost || samePrefix;
-    });
-  } catch {
+  const target = toParsedUrl(url);
+  if (!target) {
     return false;
   }
+
+  return whitelist.some((allowed) => {
+    if (typeof allowed !== "string") {
+      return false;
+    }
+    const allowedUrl = toParsedUrl(allowed);
+    if (!allowedUrl) {
+      // Ignore malformed allowlist entry instead of failing entire whitelist check.
+      return false;
+    }
+
+    const targetHost = target.host;
+    const allowedHost = allowedUrl.host;
+    if (
+      hostMatchesOrSubdomain(targetHost, allowedHost) ||
+      isSameTrustedHostFamily(targetHost, allowedHost)
+    ) {
+      return true;
+    }
+
+    const sameScheme = target.scheme === allowedUrl.scheme;
+    const sameHost = normalizeHostForCompare(targetHost) === normalizeHostForCompare(allowedHost);
+    if (!sameScheme || !sameHost) {
+      return false;
+    }
+
+    const targetPath = normalizePathPrefix(target.path);
+    const allowedPath = normalizePathPrefix(allowedUrl.path);
+    return targetPath.startsWith(allowedPath);
+  });
+}
+
+function isSameTrustedHostFamily(targetHost: string, allowedHost: string): boolean {
+  const isGoogleFamilyHost = (host: string): boolean => {
+    const normalized = normalizeHostForCompare(host);
+    if (normalized === "forms.gle") {
+      return true;
+    }
+    if (normalized === "google.com" || normalized.endsWith(".google.com")) {
+      return true;
+    }
+    // Also allow Google country domains like google.co.id, google.co.uk, etc.
+    return /^([a-z0-9-]+\.)?google\.[a-z.]+$/.test(normalized);
+  };
+
+  if (!isGoogleFamilyHost(allowedHost)) {
+    return false;
+  }
+
+  return isGoogleFamilyHost(targetHost);
 }
 
 function makeLogLine(message: string): string {
@@ -108,6 +269,17 @@ function parseExpiryMinutes(raw: string): number {
 
 function formatTimestamp(millis: number): string {
   return new Date(millis).toISOString().replace("T", " ").slice(0, 19);
+}
+
+function formatIsoLabel(value?: string | null): string {
+  if (!value) {
+    return "-";
+  }
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return value;
+  }
+  return formatTimestamp(parsed);
 }
 
 function formatRemainingDuration(millis: number): string {
@@ -151,7 +323,17 @@ export default function App() {
   const [generatedAdminTokenExpiryAt, setGeneratedAdminTokenExpiryAt] = useState("");
   const [adminTokenExpiryMinutes, setAdminTokenExpiryMinutes] = useState("120");
   const [issuedTokens, setIssuedTokens] = useState<IssuedToken[]>([]);
+  const [activeIssuedToken, setActiveIssuedToken] = useState("");
   const [tokenPinPolicies, setTokenPinPolicies] = useState<Record<string, TokenPinPolicy>>({});
+  const [tokenLaunchPolicies, setTokenLaunchPolicies] = useState<Record<string, TokenLaunchPolicy>>({});
+  const [tokenLaunchUrlInput, setTokenLaunchUrlInput] = useState("");
+  const [revokeTokenInput, setRevokeTokenInput] = useState("");
+  const [revokeTokenStatus, setRevokeTokenStatus] = useState(
+    tr("id", "Masukkan token siswa untuk revoke.", "Enter a student token to revoke.")
+  );
+  const [sessionControlStatus, setSessionControlStatus] = useState(
+    tr("id", "Kontrol sesi siap.", "Session control ready.")
+  );
   const [activeStudentToken, setActiveStudentToken] = useState("");
   const [sessionId, setSessionId] = useState(generateSessionId());
   const [riskScore, setRiskScore] = useState(0);
@@ -205,6 +387,12 @@ export default function App() {
   const [developerUnlocked, setDeveloperUnlocked] = useState(false);
   const [kioskEnabled, setKioskEnabled] = useState(true);
   const [browserUrl, setBrowserUrl] = useState("https://example.org");
+  const [backendBaseUrl, setBackendBaseUrl] = useState(DEFAULT_BACKEND_BASE_URL);
+  const [adminBackendSessionId, setAdminBackendSessionId] = useState("");
+  const [adminBackendAccessSignature, setAdminBackendAccessSignature] = useState("");
+  const [adminBackendBindingId, setAdminBackendBindingId] = useState("");
+  const [backendMonitorItems, setBackendMonitorItems] = useState<AdminTokenMonitorItem[]>([]);
+  const [backendMonitorError, setBackendMonitorError] = useState("");
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -242,6 +430,16 @@ export default function App() {
   }, [language, riskScore, role, screen]);
 
   useEffect(() => {
+    const tokenKey = generatedToken.trim().toUpperCase();
+    if (!tokenKey) {
+      setTokenLaunchUrlInput("");
+      return;
+    }
+    const existing = tokenLaunchPolicies[tokenKey];
+    setTokenLaunchUrlInput(existing?.url ?? "");
+  }, [generatedToken, tokenLaunchPolicies]);
+
+  useEffect(() => {
     if (role === "guest" || !sessionExpiresAt) {
       setSessionTimeLeftLabel("--:--:--");
       setSessionExpiryHandled(false);
@@ -276,8 +474,222 @@ export default function App() {
     return () => clearInterval(timer);
   }, [language, role, sessionExpiresAt, sessionExpiryHandled]);
 
+  useEffect(() => {
+    if (screen !== "AdminDashboardPanel") {
+      return undefined;
+    }
+    if (!adminBackendSessionId || !adminBackendAccessSignature) {
+      return undefined;
+    }
+
+    let active = true;
+    const poll = async () => {
+      if (!active) {
+        return;
+      }
+      await loadAdminMonitor();
+    };
+
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [screen, adminBackendSessionId, adminBackendAccessSignature, backendBaseUrl]);
+
   const addLog = (message: string) => {
     setLogs((prev) => [makeLogLine(message), ...prev].slice(0, 120));
+  };
+
+  const resolveIssuedTokenStatus = (entry: IssuedToken): IssuedTokenStatus => {
+    if (entry.status === "revoked") {
+      return "revoked";
+    }
+    if (Date.now() >= entry.expiresAt) {
+      return "expired";
+    }
+    return entry.status;
+  };
+
+  const updateIssuedToken = (token: string, patch: Partial<IssuedToken>) => {
+    const normalizedToken = token.trim().toUpperCase();
+    if (!normalizedToken) {
+      return;
+    }
+    setIssuedTokens((prev) =>
+      prev.map((entry) =>
+        entry.token.toUpperCase() === normalizedToken
+          ? {
+              ...entry,
+              ...patch,
+              lastSeenAt: patch.lastSeenAt ?? Date.now(),
+            }
+          : entry
+      )
+    );
+  };
+
+  const markActiveIssuedTokenOffline = () => {
+    const token = activeIssuedToken.trim().toUpperCase();
+    if (!token) {
+      return;
+    }
+    setIssuedTokens((prev) =>
+      prev.map((entry) => {
+        if (entry.token.toUpperCase() !== token) {
+          return entry;
+        }
+        if (entry.status === "revoked") {
+          return entry;
+        }
+        return {
+          ...entry,
+          status: "offline",
+          lastSeenAt: Date.now(),
+        };
+      })
+    );
+    setActiveIssuedToken("");
+  };
+
+  const parseJsonResponse = async (response: any): Promise<any> => {
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message =
+        typeof payload?.error === "string"
+          ? payload.error
+          : `HTTP ${response.status}`;
+      throw new Error(message);
+    }
+    return payload;
+  };
+
+  const loadAdminMonitor = async (): Promise<boolean> => {
+    const base = normalizeBackendBaseUrl(backendBaseUrl);
+    if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
+      return false;
+    }
+
+    try {
+      const query = new URLSearchParams({
+        session_id: adminBackendSessionId,
+        access_signature: adminBackendAccessSignature,
+      });
+      const response = await fetch(`${base}/admin/monitor?${query.toString()}`, { method: "GET" });
+      const payload = await parseJsonResponse(response);
+      const remoteTokens: BackendMonitorToken[] = Array.isArray(payload.tokens) ? payload.tokens : [];
+
+      const mapped: AdminTokenMonitorItem[] = remoteTokens.map((entry) => {
+        const rawStatus = String(entry.status ?? "issued").toLowerCase();
+        const normalizedStatus: "issued" | "online" | "offline" | "revoked" | "expired" =
+          rawStatus === "online" || rawStatus === "offline" || rawStatus === "revoked" || rawStatus === "expired"
+            ? rawStatus
+            : "issued";
+        return {
+          token: String(entry.token ?? "").toUpperCase(),
+          role: entry.role === "admin" ? "admin" : "student",
+          status: normalizedStatus,
+          ipAddress: entry.ipAddress ?? "-",
+          deviceName: entry.deviceName ?? tr(language, "Belum terdaftar", "Not registered yet"),
+          expiresAtLabel: formatIsoLabel(entry.expiresAt),
+          lastSeenLabel: formatIsoLabel(entry.lastSeenAt),
+        };
+      });
+
+      setBackendMonitorItems(mapped);
+      setBackendMonitorError("");
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setBackendMonitorError(message);
+      return false;
+    }
+  };
+
+  const callAdminControl = async (
+    path: "/admin/pause" | "/admin/resume" | "/admin/reissue-signature"
+  ): Promise<any | null> => {
+    const base = normalizeBackendBaseUrl(backendBaseUrl);
+    if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
+      return null;
+    }
+
+    const response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: adminBackendSessionId,
+        access_signature: adminBackendAccessSignature,
+      }),
+    });
+    return parseJsonResponse(response);
+  };
+
+  const bootstrapBackendAdminSession = async (expiryMinutes: number): Promise<{
+    sessionId: string;
+    studentToken: string;
+    studentExpiresAt: number;
+  } | null> => {
+    const base = normalizeBackendBaseUrl(backendBaseUrl);
+    if (!base) {
+      return null;
+    }
+
+    try {
+      const createdResponse = await fetch(`${base}/session/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          proctor_id: "AdminID",
+          token_count: 2,
+          token_ttl_minutes: expiryMinutes,
+        }),
+      });
+      const created = await parseJsonResponse(createdResponse);
+      const sessionIdFromApi = String(created.session_id ?? "");
+      const createdTokens: string[] = Array.isArray(created.tokens) ? created.tokens : [];
+      const studentToken = createdTokens.find((value) => String(value).toUpperCase().startsWith("S-")) ?? "";
+      const adminToken = createdTokens.find((value) => String(value).toUpperCase().startsWith("A-")) ?? "";
+
+      if (!sessionIdFromApi || !studentToken || !adminToken) {
+        throw new Error("Invalid create-session response");
+      }
+
+      const claimResponse = await fetch(`${base}/session/claim`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: adminToken,
+          role_hint: "admin",
+          device_fingerprint: "rn-admin-device",
+          device_name: "RN Proctor Console",
+        }),
+      });
+      const claimed = await parseJsonResponse(claimResponse);
+      const accessSignature = String(claimed.access_signature ?? "");
+      if (!accessSignature) {
+        throw new Error("Missing admin access signature");
+      }
+
+      setAdminBackendSessionId(sessionIdFromApi);
+      setAdminBackendAccessSignature(accessSignature);
+      setAdminBackendBindingId(String(claimed.device_binding_id ?? ""));
+
+      return {
+        sessionId: sessionIdFromApi,
+        studentToken: studentToken.toUpperCase(),
+        studentExpiresAt: Date.now() + expiryMinutes * 60 * 1000,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setBackendMonitorError(message);
+      addLog(`Backend bootstrap failed: ${message}`);
+      return null;
+    }
   };
 
   const registerRisk = (score: number, message: string) => {
@@ -304,6 +716,7 @@ export default function App() {
   };
 
   const logoutToLogin = () => {
+    markActiveIssuedTokenOffline();
     setRole("guest");
     setTokenInput("");
     setActiveStudentToken("");
@@ -324,12 +737,26 @@ export default function App() {
     );
     setDeveloperUnlocked(false);
     setDeveloperOrigin("LoginScreen");
+    setAdminBackendSessionId("");
+    setAdminBackendAccessSignature("");
+    setAdminBackendBindingId("");
+    setBackendMonitorItems([]);
+    setBackendMonitorError("");
+    setRevokeTokenInput("");
+    setRevokeTokenStatus(tr(language, "Masukkan token siswa untuk revoke.", "Enter a student token to revoke."));
+    setSessionControlStatus(tr(language, "Kontrol sesi siap.", "Session control ready."));
     setStatusMessage(tr(language, "Masukkan token sesi untuk melanjutkan.", "Enter session token to continue."));
     setScreen("LoginScreen");
   };
 
   const openExamFlow = (rawUrl: string, source: string, bypass = false) => {
-    const resolvedUrl = normalizeUrl(rawUrl || whitelist[0] || "");
+    const tokenKey = activeStudentToken.trim().toUpperCase();
+    const fallbackTokenKey = generatedToken.trim().toUpperCase();
+    const tokenBoundUrl =
+      (tokenKey ? getTokenLaunchUrl(tokenLaunchPolicies, tokenKey) : undefined) ||
+      (fallbackTokenKey ? getTokenLaunchUrl(tokenLaunchPolicies, fallbackTokenKey) : undefined);
+    const effectiveWhitelist = mergeWhitelist(whitelist, tokenBoundUrl);
+    const resolvedUrl = normalizeUrl(rawUrl || tokenBoundUrl || effectiveWhitelist[0] || "");
     if (!resolvedUrl) {
       setInvalidUrl(rawUrl);
       addLog(
@@ -344,13 +771,14 @@ export default function App() {
       return;
     }
 
-    if (!bypass && !isWhitelisted(resolvedUrl, whitelist)) {
+    const tokenBoundAllowed = tokenBoundUrl ? isWhitelisted(resolvedUrl, [tokenBoundUrl]) : false;
+    if (!bypass && !tokenBoundAllowed && !isWhitelisted(resolvedUrl, effectiveWhitelist)) {
       setInvalidUrl(resolvedUrl);
       addLog(
         tr(
           language,
-          `URL diblokir (di luar whitelist): ${resolvedUrl}`,
-          `URL blocked (not whitelisted): ${resolvedUrl}`
+          `URL diblokir (di luar whitelist): ${resolvedUrl} | token=${tokenKey || fallbackTokenKey || "-"} | bound=${tokenBoundUrl || "-"}`,
+          `URL blocked (not whitelisted): ${resolvedUrl} | token=${tokenKey || fallbackTokenKey || "-"} | bound=${tokenBoundUrl || "-"}`
         )
       );
       registerRisk(6, "Repeated violation: non-whitelisted URL");
@@ -376,6 +804,7 @@ export default function App() {
     const token = tokenInput.trim();
     if (token === STUDENT_TOKEN) {
       setRole("student");
+      setActiveIssuedToken("");
       setActiveStudentToken(token.toUpperCase());
       setSessionId(generateSessionId());
       setSessionExpiresAt(Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000);
@@ -389,6 +818,7 @@ export default function App() {
 
     if (token === ADMIN_TOKEN) {
       setRole("admin");
+      setActiveIssuedToken("");
       setActiveStudentToken("");
       setSessionId(generateSessionId());
       setSessionExpiresAt(Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000);
@@ -402,6 +832,7 @@ export default function App() {
 
     if (token === DEVELOPER_PASSWORD) {
       setRole("developer");
+      setActiveIssuedToken("");
       setActiveStudentToken("");
       setSessionId(generateSessionId());
       setSessionExpiresAt(Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000);
@@ -417,7 +848,21 @@ export default function App() {
 
     const issued = issuedTokens.find((entry) => entry.token.toUpperCase() === token.toUpperCase());
     if (issued) {
+      if (resolveIssuedTokenStatus(issued) === "revoked") {
+        const reason = issued.revokedReason ?? "ADMIN_FORCE_LOGOUT";
+        setStatusMessage(
+          tr(
+            language,
+            `Token telah direvoke proktor. Alasan: ${reason}`,
+            `Token has been revoked by proctor. Reason: ${reason}`
+          )
+        );
+        addLog(`Revoked token rejected: ${token} | reason=${reason}`);
+        return;
+      }
+
       if (Date.now() >= issued.expiresAt) {
+        updateIssuedToken(issued.token, { status: "expired" });
         setStatusMessage(tr(language, "Token sudah kedaluwarsa.", "Token has expired."));
         addLog(`Expired token rejected: ${token}`);
         return;
@@ -425,11 +870,25 @@ export default function App() {
 
       const resolvedRole: Role = issued.role === "admin" ? "admin" : "student";
       setRole(resolvedRole);
+      setActiveIssuedToken(token.toUpperCase());
       setActiveStudentToken(resolvedRole === "student" ? token.toUpperCase() : "");
       setSessionId(generateSessionId());
       setSessionExpiresAt(issued.expiresAt);
       setSessionExpiryHandled(false);
       setRiskScore(0);
+      updateIssuedToken(issued.token, {
+        status: "online",
+        ipAddress: resolvedRole === "admin" ? "192.168.1.11" : "192.168.1.23",
+        deviceName: resolvedRole === "admin" ? "Proctor Console" : "Android Student Device",
+        lastSeenAt: Date.now(),
+      });
+      if (resolvedRole === "student") {
+        const tokenKey = token.toUpperCase();
+        const boundUrl = tokenLaunchPolicies[tokenKey]?.url;
+        if (boundUrl) {
+          setManualUrlInput(boundUrl);
+        }
+      }
       setStatusMessage(
         tr(
           language,
@@ -448,6 +907,10 @@ export default function App() {
 
   const generatedTokenKey = generatedToken.trim().toUpperCase();
   const generatedTokenPinPolicy = generatedTokenKey ? tokenPinPolicies[generatedTokenKey] : undefined;
+  const generatedTokenLaunchPolicy = generatedTokenKey ? tokenLaunchPolicies[generatedTokenKey] : undefined;
+  const activeTokenKey = activeStudentToken.trim().toUpperCase();
+  const activeTokenLaunchUrl = activeTokenKey ? tokenLaunchPolicies[activeTokenKey]?.url : undefined;
+  const effectiveStudentWhitelist = mergeWhitelist(whitelist, activeTokenLaunchUrl);
   const generatedTokenPinStatus = !generatedTokenKey
     ? tr(language, "Buat token siswa dulu untuk mengikat PIN.", "Generate a student token first to bind PIN.")
     : !generatedTokenPinPolicy
@@ -463,6 +926,31 @@ export default function App() {
             `PIN expired untuk token ${generatedTokenKey} (${generatedTokenPinPolicy.effectiveDate}).`,
             `PIN expired for token ${generatedTokenKey} (${generatedTokenPinPolicy.effectiveDate}).`
           );
+  const generatedTokenLaunchStatus = !generatedTokenKey
+    ? tr(language, "Buat token siswa dulu untuk mengikat URL.", "Generate a student token first to bind URL.")
+    : !generatedTokenLaunchPolicy
+      ? tr(language, `URL belum diset untuk token ${generatedTokenKey}.`, `URL is not set for token ${generatedTokenKey}.`)
+      : tr(
+          language,
+          `URL token ${generatedTokenKey}: ${generatedTokenLaunchPolicy.url}`,
+          `Token URL ${generatedTokenKey}: ${generatedTokenLaunchPolicy.url}`
+        );
+
+  const localTokenMonitorItems: AdminTokenMonitorItem[] = [...issuedTokens]
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+    .map((entry) => ({
+      token: entry.token,
+      role: entry.role,
+      status: resolveIssuedTokenStatus(entry),
+      ipAddress: entry.ipAddress || "-",
+      deviceName: entry.deviceName || tr(language, "Belum terdaftar", "Not registered yet"),
+      expiresAtLabel: formatTimestamp(entry.expiresAt),
+      lastSeenLabel: formatTimestamp(entry.lastSeenAt),
+    }));
+  const tokenMonitorItems: AdminTokenMonitorItem[] =
+    adminBackendSessionId && adminBackendAccessSignature && backendMonitorItems.length > 0
+      ? backendMonitorItems
+      : localTokenMonitorItems;
 
   if (screen === "SplashScreen") {
     return <SplashScreen bootMessage={bootMessage} language={language} />;
@@ -551,7 +1039,7 @@ export default function App() {
         overlayTimestamp={overlayTimestamp}
         showIntegrityWarning={showIntegrityWarning}
         integrityMessage={integrityMessage}
-        whitelist={whitelist}
+        whitelist={effectiveStudentWhitelist}
         bypassWhitelist={bypassWhitelist || role === "admin" || role === "developer"}
         onPinAttemptChange={setPinAttempt}
         onBlockedNavigation={(blockedUrl) => {
@@ -597,6 +1085,7 @@ export default function App() {
 
           if (pinAttempt.trim() === policy.pin.trim()) {
             addLog(`Student exited exam with valid proctor PIN. token=${targetToken}`);
+            updateIssuedToken(targetToken, { status: "offline", lastSeenAt: Date.now() });
             setScreen("ExamSelectionScreen");
             return;
           }
@@ -612,6 +1101,7 @@ export default function App() {
         }}
         onFinishExam={() => {
           addLog("Student exam marked as completed.");
+          updateIssuedToken(activeStudentToken, { status: "offline", lastSeenAt: Date.now() });
           setScreen("SuccessScreen");
         }}
         onSimulateViolation={() => {
@@ -661,13 +1151,83 @@ export default function App() {
     return (
       <AdminDashboardPanel
         language={language}
+        backendBaseUrl={backendBaseUrl}
         generatedToken={generatedToken}
         generatedTokenExpiryAt={generatedTokenExpiryAt}
         tokenExpiryMinutes={tokenExpiryMinutes}
+        tokenLaunchUrl={tokenLaunchUrlInput}
+        tokenLaunchUrlStatus={generatedTokenLaunchStatus}
         proctorPin={proctorPin}
         proctorPinStatus={generatedTokenPinStatus}
+        revokeTokenInput={revokeTokenInput}
+        revokeTokenStatus={revokeTokenStatus}
+        sessionControlStatus={sessionControlStatus}
+        tokenMonitorItems={tokenMonitorItems}
         logs={logs}
         onTokenExpiryMinutesChange={setTokenExpiryMinutes}
+        onTokenLaunchUrlChange={setTokenLaunchUrlInput}
+        onSaveTokenLaunchUrl={async () => {
+          const targetToken = generatedToken.trim().toUpperCase();
+          if (!targetToken) {
+            addLog("Token URL binding rejected: no student token selected.");
+            return;
+          }
+
+          const normalizedUrl = normalizeUrl(tokenLaunchUrlInput);
+          if (!normalizedUrl) {
+            addLog(`Token URL binding rejected: empty URL for token ${targetToken}.`);
+            return;
+          }
+
+          setTokenLaunchPolicies((prev) => ({
+            ...prev,
+            [targetToken]: {
+              url: normalizedUrl,
+              updatedAt: new Date().toISOString(),
+            },
+          }));
+          setWhitelist((prev) => {
+            const next = new Set(prev.map((entry) => normalizeUrl(entry)));
+            next.add(normalizedUrl);
+            return Array.from(next);
+          });
+          setTokenLaunchUrlInput(normalizedUrl);
+          addLog(`Token URL binding saved. token=${targetToken} url=${normalizedUrl}`);
+
+          const base = normalizeBackendBaseUrl(backendBaseUrl);
+          if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
+            addLog("Token URL binding synced locally only (backend admin session not active).");
+            return;
+          }
+
+          try {
+            const whitelistResponse = await fetch(`${base}/session/whitelist/add`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                session_id: adminBackendSessionId,
+                access_signature: adminBackendAccessSignature,
+                url: normalizedUrl,
+              }),
+            });
+            await parseJsonResponse(whitelistResponse);
+
+            const launchResponse = await fetch(`${base}/exam/launch`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                session_id: adminBackendSessionId,
+                access_signature: adminBackendAccessSignature,
+                launch_url: normalizedUrl,
+              }),
+            });
+            await parseJsonResponse(launchResponse);
+            addLog(`Backend whitelist synced for token URL. session=${adminBackendSessionId}`);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            addLog(`Backend whitelist sync failed: ${message}`);
+          }
+        }}
         onProctorPinChange={setProctorPin}
         onSaveProctorPin={() => {
           if (proctorPin.trim().length < 4) {
@@ -690,18 +1250,310 @@ export default function App() {
           setProctorPinEffectiveDate(effectiveDate);
           addLog(`Proctor PIN updated for student token ${targetToken}. effective_date=${effectiveDate}`);
         }}
-        onGenerateToken={() => {
+        onRevokeTokenInputChange={setRevokeTokenInput}
+        onRevokeStudentToken={async () => {
+          const targetToken = revokeTokenInput.trim().toUpperCase();
+          if (!targetToken) {
+            const message = tr(language, "Isi token siswa terlebih dahulu.", "Provide a student token first.");
+            setRevokeTokenStatus(message);
+            addLog("Student revoke rejected: empty token input.");
+            return;
+          }
+
+          const base = normalizeBackendBaseUrl(backendBaseUrl);
+          if (base && adminBackendSessionId && adminBackendAccessSignature) {
+            try {
+              const response = await fetch(`${base}/admin/revoke-student`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  session_id: adminBackendSessionId,
+                  access_signature: adminBackendAccessSignature,
+                  student_token: targetToken,
+                  reason: "ADMIN_FORCE_LOGOUT",
+                }),
+              });
+              await parseJsonResponse(response);
+
+              setIssuedTokens((prev) =>
+                prev.map((entry) =>
+                  entry.token.toUpperCase() === targetToken
+                    ? {
+                        ...entry,
+                        status: "revoked",
+                        revokedReason: "ADMIN_FORCE_LOGOUT",
+                        lastSeenAt: Date.now(),
+                      }
+                    : entry
+                )
+              );
+              await loadAdminMonitor();
+
+              const successMessage = tr(
+                language,
+                `Sesi siswa ${targetToken} berhasil direvoke di backend.`,
+                `Student session ${targetToken} was revoked in backend.`
+              );
+              setRevokeTokenStatus(successMessage);
+              addLog(`Backend revoke success: token=${targetToken}`);
+
+              if (activeStudentToken.trim().toUpperCase() === targetToken && role === "student") {
+                const reason = tr(
+                  language,
+                  "Sesi Anda direvoke oleh proktor.",
+                  "Your session was revoked by the proctor."
+                );
+                setViolationReason(reason);
+                setStatusMessage(reason);
+                setScreen("ViolationScreen");
+              }
+              return;
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              setRevokeTokenStatus(
+                tr(
+                  language,
+                  `Gagal revoke via backend: ${message}`,
+                  `Backend revoke failed: ${message}`
+                )
+              );
+              addLog(`Backend revoke failed: token=${targetToken} | ${message}`);
+              return;
+            }
+          }
+
+          const targetEntry = issuedTokens.find((entry) => entry.token.toUpperCase() === targetToken);
+          if (!targetEntry) {
+            const message = tr(language, "Token siswa tidak ditemukan.", "Student token not found.");
+            setRevokeTokenStatus(message);
+            addLog(`Student revoke failed: token not found (${targetToken}).`);
+            return;
+          }
+
+          if (targetEntry.role !== "student") {
+            const message = tr(
+              language,
+              "Token tersebut bukan token siswa.",
+              "That token is not a student token."
+            );
+            setRevokeTokenStatus(message);
+            addLog(`Student revoke failed: role mismatch (${targetToken}).`);
+            return;
+          }
+
+          if (targetEntry.status === "revoked") {
+            const message = tr(language, "Token sudah direvoke.", "Token is already revoked.");
+            setRevokeTokenStatus(message);
+            addLog(`Student revoke ignored: already revoked (${targetToken}).`);
+            return;
+          }
+
+          setIssuedTokens((prev) =>
+            prev.map((entry) =>
+              entry.token.toUpperCase() === targetToken
+                ? {
+                    ...entry,
+                    status: "revoked",
+                    revokedReason: "ADMIN_FORCE_LOGOUT",
+                    lastSeenAt: Date.now(),
+                  }
+                : entry
+            )
+          );
+
+          const successMessage = tr(
+            language,
+            `Sesi siswa ${targetToken} berhasil direvoke (lokal).`,
+            `Student session ${targetToken} has been revoked (local).`
+          );
+          setRevokeTokenStatus(successMessage);
+          addLog(`Admin revoked local student token ${targetToken}.`);
+
+          if (activeStudentToken.trim().toUpperCase() === targetToken && role === "student") {
+            const reason = tr(
+              language,
+              "Sesi Anda direvoke oleh proktor.",
+              "Your session was revoked by the proctor."
+            );
+            setViolationReason(reason);
+            setStatusMessage(reason);
+            setScreen("ViolationScreen");
+          }
+        }}
+        onPauseSession={async () => {
+          try {
+            const payload = await callAdminControl("/admin/pause");
+            if (!payload) {
+              const message = tr(
+                language,
+                "Session backend admin belum aktif. Generate token dulu.",
+                "Backend admin session is not active. Generate token first."
+              );
+              setSessionControlStatus(message);
+              addLog("Pause session rejected: backend admin session missing.");
+              return;
+            }
+            await loadAdminMonitor();
+            const state = String(payload.session_state ?? "PAUSED");
+            const message = tr(
+              language,
+              `Session berhasil di-pause (${state}).`,
+              `Session paused successfully (${state}).`
+            );
+            setSessionControlStatus(message);
+            addLog(`Admin paused session. state=${state}`);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setSessionControlStatus(
+              tr(
+                language,
+                `Gagal pause session: ${message}`,
+                `Failed to pause session: ${message}`
+              )
+            );
+            addLog(`Pause session failed: ${message}`);
+          }
+        }}
+        onResumeSession={async () => {
+          try {
+            const payload = await callAdminControl("/admin/resume");
+            if (!payload) {
+              const message = tr(
+                language,
+                "Session backend admin belum aktif. Generate token dulu.",
+                "Backend admin session is not active. Generate token first."
+              );
+              setSessionControlStatus(message);
+              addLog("Resume session rejected: backend admin session missing.");
+              return;
+            }
+            await loadAdminMonitor();
+            const state = String(payload.session_state ?? "IN_PROGRESS");
+            const message = tr(
+              language,
+              `Session berhasil di-resume (${state}).`,
+              `Session resumed successfully (${state}).`
+            );
+            setSessionControlStatus(message);
+            addLog(`Admin resumed session. state=${state}`);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setSessionControlStatus(
+              tr(
+                language,
+                `Gagal resume session: ${message}`,
+                `Failed to resume session: ${message}`
+              )
+            );
+            addLog(`Resume session failed: ${message}`);
+          }
+        }}
+        onReissueSignature={async () => {
+          try {
+            const payload = await callAdminControl("/admin/reissue-signature");
+            if (!payload) {
+              const message = tr(
+                language,
+                "Session backend admin belum aktif. Generate token dulu.",
+                "Backend admin session is not active. Generate token first."
+              );
+              setSessionControlStatus(message);
+              addLog("Reissue signature rejected: backend admin session missing.");
+              return;
+            }
+            await loadAdminMonitor();
+            const bindingId = String(payload.binding_id ?? "");
+            const state = String(payload.session_state ?? "IN_PROGRESS");
+            const message = tr(
+              language,
+              `Signature siswa diterbitkan ulang (${state})${bindingId ? ` [${bindingId}]` : ""}.`,
+              `Student signature reissued (${state})${bindingId ? ` [${bindingId}]` : ""}.`
+            );
+            setSessionControlStatus(message);
+            addLog(`Admin reissued student signature. binding=${bindingId || "-"} state=${state}`);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setSessionControlStatus(
+              tr(
+                language,
+                `Gagal reissue signature: ${message}`,
+                `Failed to reissue signature: ${message}`
+              )
+            );
+            addLog(`Reissue signature failed: ${message}`);
+          }
+        }}
+        onGenerateToken={async () => {
           const expiryMinutes = parseExpiryMinutes(tokenExpiryMinutes);
+          const remote = await bootstrapBackendAdminSession(expiryMinutes);
+
+          if (remote) {
+            setGeneratedToken(remote.studentToken);
+            setGeneratedTokenExpiryAt(formatTimestamp(remote.studentExpiresAt));
+            setSessionId(remote.sessionId);
+            setRevokeTokenStatus(
+              tr(
+                language,
+                "Backend aktif. Revocation siap digunakan.",
+                "Backend connected. Revocation is ready."
+              )
+            );
+            setSessionControlStatus(
+              tr(
+                language,
+                "Kontrol session backend aktif (pause/resume/reissue).",
+                "Backend session control is active (pause/resume/reissue)."
+              )
+            );
+            setIssuedTokens((prev) => {
+              const next = prev.filter((entry) => entry.token.toUpperCase() !== remote.studentToken);
+              next.push({
+                token: remote.studentToken,
+                role: "student",
+                expiresAt: remote.studentExpiresAt,
+                source: "backend-session",
+                status: "issued",
+                ipAddress: "-",
+                deviceName: tr(language, "Belum login", "Not logged in"),
+                lastSeenAt: Date.now(),
+              });
+              return next;
+            });
+            await loadAdminMonitor();
+            addLog(
+              `Backend session created: ${remote.sessionId} | student_token=${remote.studentToken} | ttl=${expiryMinutes}m`
+            );
+            return;
+          }
+
           const token = generateToken();
           const expiresAt = Date.now() + expiryMinutes * 60 * 1000;
           setGeneratedToken(token);
           setGeneratedTokenExpiryAt(formatTimestamp(expiresAt));
           setIssuedTokens((prev) => {
             const next = prev.filter((entry) => entry.token.toUpperCase() !== token.toUpperCase());
-            next.push({ token, role: "student", expiresAt, source: "admin-dashboard" });
+            next.push({
+              token,
+              role: "student",
+              expiresAt,
+              source: "admin-dashboard",
+              status: "issued",
+              ipAddress: "-",
+              deviceName: tr(language, "Belum login", "Not logged in"),
+              lastSeenAt: Date.now(),
+            });
             return next;
           });
-          addLog(`Admin generated new student token: ${token} | ttl=${expiryMinutes}m | exp=${formatTimestamp(expiresAt)}`);
+          addLog(
+            `Admin generated local student token (backend unavailable): ${token} | ttl=${expiryMinutes}m | exp=${formatTimestamp(expiresAt)}`
+          );
+          setSessionControlStatus(
+            tr(
+              language,
+              "Kontrol session backend belum aktif.",
+              "Backend session control is not active."
+            )
+          );
         }}
         onCopyGeneratedToken={() => {
           if (!generatedToken) {
@@ -716,6 +1568,7 @@ export default function App() {
         onOpenSettings={() => openSettingsFrom("AdminDashboardPanel")}
         onLogout={() => {
           addLog("Admin logged out.");
+          markActiveIssuedTokenOffline();
           logoutToLogin();
         }}
       />
@@ -726,12 +1579,13 @@ export default function App() {
     return (
       <URLWhitelist
         language={language}
+        backendBaseUrl={backendBaseUrl}
         whitelistInput={whitelistInput}
         onWhitelistInputChange={setWhitelistInput}
         whitelist={whitelist}
         proctorPin={proctorPin}
         onProctorPinChange={setProctorPin}
-        onAddUrl={() => {
+        onAddUrl={async () => {
           const normalized = normalizeUrl(whitelistInput);
           if (!normalized) {
             addLog("Whitelist add blocked: empty URL.");
@@ -744,6 +1598,29 @@ export default function App() {
           setWhitelist((prev) => [...prev, normalized]);
           setWhitelistInput("");
           addLog(`Whitelist URL added: ${normalized}`);
+
+          const base = normalizeBackendBaseUrl(backendBaseUrl);
+          if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
+            addLog("Whitelist saved locally only (backend admin session not active).");
+            return;
+          }
+
+          try {
+            const response = await fetch(`${base}/session/whitelist/add`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                session_id: adminBackendSessionId,
+                access_signature: adminBackendAccessSignature,
+                url: normalized,
+              }),
+            });
+            await parseJsonResponse(response);
+            addLog(`Whitelist synced to backend: ${normalized}`);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            addLog(`Whitelist backend sync failed: ${message}`);
+          }
         }}
         onSavePin={() => {
           if (proctorPin.trim().length < 4) {
@@ -779,6 +1656,8 @@ export default function App() {
     return (
       <DeveloperAccessScreen
         language={language}
+        backendBaseUrl={backendBaseUrl}
+        onBackendBaseUrlChange={setBackendBaseUrl}
         password={developerPassword}
         onPasswordChange={setDeveloperPassword}
         unlocked={developerUnlocked}
@@ -819,7 +1698,16 @@ export default function App() {
           setGeneratedAdminTokenExpiryAt(formatTimestamp(expiresAt));
           setIssuedTokens((prev) => {
             const next = prev.filter((entry) => entry.token.toUpperCase() !== token.toUpperCase());
-            next.push({ token, role: "admin", expiresAt, source: "developer-panel" });
+            next.push({
+              token,
+              role: "admin",
+              expiresAt,
+              source: "developer-panel",
+              status: "issued",
+              ipAddress: "-",
+              deviceName: tr(language, "Belum login", "Not logged in"),
+              lastSeenAt: Date.now(),
+            });
             return next;
           });
           addLog(`Developer generated admin token: ${token} | ttl=${expiryMinutes}m | exp=${formatTimestamp(expiresAt)}`);
@@ -857,6 +1745,12 @@ export default function App() {
           }
           setPinStatus(
             tr(nextLanguage, "Masukkan PIN proktor untuk keluar browser.", "Enter proctor PIN to exit browser.")
+          );
+          setRevokeTokenStatus(
+            tr(nextLanguage, "Masukkan token siswa untuk revoke.", "Enter a student token to revoke.")
+          );
+          setSessionControlStatus(
+            tr(nextLanguage, "Kontrol sesi siap.", "Session control ready.")
           );
           addLog(
             tr(

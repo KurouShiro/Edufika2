@@ -8,6 +8,8 @@ object TestConstants {
     const val SESSION_EXPIRY_MILLIS = 2 * 60 * 60 * 1000L
     const val HEARTBEAT_INTERVAL_MILLIS = 7_000L
     const val HEARTBEAT_TIMEOUT_MILLIS = 30_000L
+    const val HEARTBEAT_SUSPEND_MILLIS = 90_000L
+    const val HEARTBEAT_LOCK_MILLIS = 180_000L
     const val ACCESS_SIGNATURE_ROTATION_MILLIS = 5 * 60 * 1000L
     const val RISK_LOCK_THRESHOLD = 12
 
@@ -20,6 +22,11 @@ object TestConstants {
     const val PREF_SERVER_BASE_URL = "pref_server_base_url"
     const val PREF_DEVICE_BINDING_ID = "pref_device_binding_id"
     const val PREF_ISSUED_TOKENS = "pref_issued_tokens"
+    const val PREF_LAST_STUDENT_TOKEN = "pref_last_student_token"
+    const val PREF_SESSION_SNAPSHOT = "pref_session_snapshot"
+    const val PREF_PENDING_RECOVERY_REASON = "pref_pending_recovery_reason"
+    const val PREF_OFFLINE_EVENT_QUEUE = "pref_offline_event_queue"
+    const val PREF_OFFLINE_HEARTBEAT_QUEUE = "pref_offline_heartbeat_queue"
     const val LOGGER_FILE_NAME = "logger.txt"
 
     const val ARG_EXAM_URL = "examUrl"
@@ -37,11 +44,15 @@ object TestConstants {
     const val ACTION_HEARTBEAT_STATUS = "com.techivibes.edufika.ACTION_HEARTBEAT_STATUS"
     const val EXTRA_LOCK_REASON = "extra_lock_reason"
     const val EXTRA_HEARTBEAT_MESSAGE = "extra_heartbeat_message"
+    const val EXTRA_HEARTBEAT_STATE = "extra_heartbeat_state"
 
     const val EVENT_APP_BACKGROUND = "APP_BACKGROUND"
     const val EVENT_OVERLAY_DETECTED = "OVERLAY_DETECTED"
     const val EVENT_ACCESSIBILITY_ACTIVE = "ACCESSIBILITY_ACTIVE"
     const val EVENT_NETWORK_DROP = "NETWORK_DROP"
+    const val EVENT_POWER_WARNING = "POWER_WARNING"
+    const val EVENT_RESTART_RECOVERY = "RESTART_RECOVERY"
+    const val EVENT_OFFLINE_HEARTBEAT_SYNC = "OFFLINE_HEARTBEAT_SYNC"
     const val EVENT_REPEATED_VIOLATION = "REPEATED_VIOLATION"
     const val EVENT_MULTI_WINDOW = "MULTI_WINDOW"
     const val EVENT_FOCUS_LOST = "FOCUS_LOST"

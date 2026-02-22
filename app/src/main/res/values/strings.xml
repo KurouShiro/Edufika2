@@ -23,6 +23,7 @@
     <string name="open_browser_mode">Buka Browser Biasa</string>
     <string name="pin_prompt">Masukkan PIN Proktor</string>
     <string name="pin_hint">PIN Proktor</string>
+    <string name="student_token_hint">Student Token (S-...)</string>
     <string name="submit">Submit</string>
     <string name="cancel">Batal</string>
     <string name="logout">Logout</string>
@@ -43,4 +44,8 @@
     <string name="admin_token_expiry_minutes_hint">Expiry admin token (menit), contoh: 120</string>
     <string name="generate_admin_token">Generate Admin Token</string>
     <string name="copy_admin_token">Copy Admin Token</string>
+    <string name="pause_session">Pause Session</string>
+    <string name="resume_session">Resume Session</string>
+    <string name="reissue_signature">Reissue Signature</string>
+    <string name="revoke_session">Revoke Session</string>
 </resources>

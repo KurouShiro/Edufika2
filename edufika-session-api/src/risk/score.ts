@@ -14,7 +14,6 @@ export function calculateRisk(event: RiskEventInput): number {
 
   if (!event.focus) score += 3;
   if (event.multi_window) score += 5;
-  if (event.network_state === "unstable") score += 2;
   if (event.overlay_detected) score += 5;
   if (event.accessibility_active) score += 5;
   if (event.debug_detected || event.emulator_detected || event.rooted) score += 2;
@@ -31,7 +30,13 @@ export function violationSeverityFromType(type: string): number {
     case "ACCESSIBILITY_ACTIVE":
       return 5;
     case "NETWORK_DROP":
-      return 2;
+      return 0;
+    case "OFFLINE_HEARTBEAT_SYNC":
+      return 0;
+    case "RESTART_RECOVERY":
+      return 0;
+    case "POWER_WARNING":
+      return 0;
     case "REPEATED_VIOLATION":
       return 6;
     case "MULTI_WINDOW":

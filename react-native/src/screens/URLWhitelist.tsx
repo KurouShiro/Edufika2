@@ -1,10 +1,11 @@
 import React from "react";
-import { ScrollView, Text } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
-import Layout, { TerminalBadge, TerminalButton, TerminalInput, terminalStyles } from "./Layout";
+import Layout, { TerminalButton, TerminalInput, palette } from "./Layout";
 
 type URLWhitelistProps = {
   language: AppLanguage;
+  backendBaseUrl: string;
   whitelistInput: string;
   onWhitelistInputChange: (value: string) => void;
   whitelist: string[];
@@ -17,6 +18,7 @@ type URLWhitelistProps = {
 
 export default function URLWhitelist({
   language,
+  backendBaseUrl,
   whitelistInput,
   onWhitelistInputChange,
   whitelist,
@@ -28,42 +30,103 @@ export default function URLWhitelist({
 }: URLWhitelistProps) {
   return (
     <Layout
-      title={tr(language, "Registry Whitelist", "Whitelist Registry")}
-      subtitle={tr(
-        language,
-        "Kontrol khusus proktor untuk domain ujian yang diizinkan dan kebijakan PIN.",
-        "Proctor-only controls for allowed exam domains and PIN policy."
-      )}
-      topRight={<TerminalBadge label={tr(language, "OTORISASI PROKTOR", "PROCTOR AUTH")} />}
-      footer={<TerminalButton label={tr(language, "Kembali ke Dashboard", "Back To Dashboard")} variant="outline" onPress={onBack} />}
+      title={tr(language, "Whitelist Manager", "Whitelist Manager")}
+      subtitle={tr(language, "Kelola domain ujian dan kebijakan PIN proktor.", "Manage exam domains and proctor PIN policy.")}
+      footer={<TerminalButton label={tr(language, "Kembali ke Dashboard", "Back to Dashboard")} variant="outline" onPress={onBack} />}
     >
-      <ScrollView showsVerticalScrollIndicator={false}>
-        <TerminalInput
-          value={whitelistInput}
-          onChangeText={onWhitelistInputChange}
-          label={tr(language, "Tambah URL / Domain Diizinkan", "Add Allowed URL / Domain")}
-          placeholder="https://exam.school.edu"
-          autoCapitalize="none"
-        />
-        <TerminalButton label={tr(language, "Tambah URL Whitelist", "Add Whitelist URL")} onPress={onAddUrl} />
-
-        <TerminalInput
-          value={proctorPin}
-          onChangeText={onProctorPinChange}
-          label={tr(language, "PIN Proktor Untuk Keluar Browser", "Proctor PIN For Browser Exit")}
-          placeholder={tr(language, "Masukkan PIN", "Input PIN")}
-          keyboardType="number-pad"
-          secureTextEntry
-        />
-        <TerminalButton label={tr(language, "Simpan PIN Proktor", "Save Proctor PIN")} variant="outline" onPress={onSavePin} />
-
-        <Text style={terminalStyles.heading}>{tr(language, "Allowlist Aktif", "Active Allowlist")}</Text>
-        {whitelist.map((url, index) => (
-          <Text style={terminalStyles.bodyText} key={`${index}-${url}`}>
-            {index + 1}. {url}
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+        <View style={styles.card}>
+          <Text style={styles.backendLine}>
+            {tr(language, "Backend Target:", "Backend Target:")} {backendBaseUrl}
           </Text>
-        ))}
+          <TerminalInput
+            value={whitelistInput}
+            onChangeText={onWhitelistInputChange}
+            label={tr(language, "Tambah URL", "Add URL")}
+            placeholder="https://forms.google.com/..."
+            autoCapitalize="none"
+          />
+          <TerminalButton label={tr(language, "Tambah ke Whitelist", "Add to Whitelist")} onPress={onAddUrl} />
+        </View>
+
+        <View style={styles.card}>
+          <TerminalInput
+            value={proctorPin}
+            onChangeText={onProctorPinChange}
+            label={tr(language, "PIN Proktor", "Proctor PIN")}
+            placeholder="4321"
+            keyboardType="number-pad"
+            secureTextEntry
+          />
+          <TerminalButton label={tr(language, "Simpan PIN", "Save PIN")} variant="outline" onPress={onSavePin} />
+        </View>
+
+        <Text style={styles.sectionTitle}>{tr(language, "Active Allowlist", "Active Allowlist")}</Text>
+        {whitelist.length === 0 ? (
+          <Text style={styles.emptyText}>{tr(language, "Belum ada URL.", "No URLs added.")}</Text>
+        ) : (
+          whitelist.map((url, index) => (
+            <View key={`${index}-${url}`} style={styles.item}>
+              <Text style={styles.itemIdx}>{index + 1}.</Text>
+              <Text style={styles.itemText}>{url}</Text>
+            </View>
+          ))
+        )}
       </ScrollView>
     </Layout>
   );
 }
+
+const styles = StyleSheet.create({
+  content: {
+    paddingBottom: 8,
+  },
+  card: {
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 20,
+    backgroundColor: "#ffffff",
+    padding: 12,
+    marginBottom: 10,
+  },
+  backendLine: {
+    color: "#9ca3af",
+    fontFamily: "JetBrainsMono-Regular",
+    fontSize: 10,
+    marginBottom: 8,
+  },
+  sectionTitle: {
+    color: "#1f2937",
+    fontFamily: "JetBrainsMono-Bold",
+    fontSize: 12,
+    marginBottom: 8,
+  },
+  emptyText: {
+    color: "#9ca3af",
+    fontFamily: "JetBrainsMono-Regular",
+    fontSize: 10,
+  },
+  item: {
+    flexDirection: "row",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 14,
+    backgroundColor: "#ffffff",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 6,
+  },
+  itemIdx: {
+    color: "#9ca3af",
+    fontFamily: "JetBrainsMono-Bold",
+    fontSize: 10,
+    minWidth: 18,
+  },
+  itemText: {
+    flex: 1,
+    color: "#4b5563",
+    fontFamily: "JetBrainsMono-Regular",
+    fontSize: 10,
+  },
+});

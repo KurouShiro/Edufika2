@@ -37,6 +37,10 @@ class AdminPanelTest : Fragment(R.layout.fragment_admin_panel_test) {
         val generateTokenButton = view.findViewById<MaterialButton>(R.id.generateTokenButton)
         val copyGeneratedTokenButton = view.findViewById<MaterialButton>(R.id.copyGeneratedTokenButton)
         val openWhitelistButton = view.findViewById<MaterialButton>(R.id.openWhitelistButton)
+        val pauseSessionButton = view.findViewById<MaterialButton>(R.id.pauseSessionButton)
+        val resumeSessionButton = view.findViewById<MaterialButton>(R.id.resumeSessionButton)
+        val reissueSignatureButton = view.findViewById<MaterialButton>(R.id.reissueSignatureButton)
+        val revokeSessionButton = view.findViewById<MaterialButton>(R.id.revokeSessionButton)
         val adminLogoutButton = view.findViewById<MaterialButton>(R.id.adminLogoutButton)
         val sessionClient = SessionClient(requireContext())
         var latestGeneratedToken: String? = null
@@ -97,6 +101,10 @@ class AdminPanelTest : Fragment(R.layout.fragment_admin_panel_test) {
                     source = source
                 )
                 latestGeneratedToken = token
+                requireContext().getSharedPreferences(TestConstants.PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(TestConstants.PREF_LAST_STUDENT_TOKEN, token)
+                    .apply()
                 generatedTokenText.text = buildString {
                     append("Token siswa baru: $token\n")
                     append("Expired at: ${TestUtils.timestampFromMillis(issued.expiresAtMillis)}\n")
@@ -142,6 +150,81 @@ class AdminPanelTest : Fragment(R.layout.fragment_admin_panel_test) {
                 logger.append("ADMIN", "Session kontrol backend aktif untuk whitelist/PIN.")
 
                 findNavController().navigate(R.id.urlWhitelist)
+            }
+        }
+
+        pauseSessionButton.setOnClickListener {
+            lifecycleScope.launch {
+                val ready = sessionClient.ensureAdminControlSession()
+                if (!ready) {
+                    TestUtils.showToast(requireContext(), "Session admin backend tidak valid.")
+                    return@launch
+                }
+                val paused = sessionClient.pauseSession()
+                if (paused) {
+                    logger.append("ADMIN", "Proktor pause session.")
+                    TestUtils.showToast(requireContext(), "Session di-pause.")
+                    refreshLogs()
+                } else {
+                    TestUtils.showToast(requireContext(), "Gagal pause session.")
+                }
+            }
+        }
+
+        resumeSessionButton.setOnClickListener {
+            lifecycleScope.launch {
+                val ready = sessionClient.ensureAdminControlSession()
+                if (!ready) {
+                    TestUtils.showToast(requireContext(), "Session admin backend tidak valid.")
+                    return@launch
+                }
+                val resumed = sessionClient.resumeSession()
+                if (resumed) {
+                    logger.append("ADMIN", "Proktor resume session.")
+                    TestUtils.showToast(requireContext(), "Session dilanjutkan.")
+                    refreshLogs()
+                } else {
+                    TestUtils.showToast(requireContext(), "Gagal resume session.")
+                }
+            }
+        }
+
+        reissueSignatureButton.setOnClickListener {
+            lifecycleScope.launch {
+                val ready = sessionClient.ensureAdminControlSession()
+                if (!ready) {
+                    TestUtils.showToast(requireContext(), "Session admin backend tidak valid.")
+                    return@launch
+                }
+                val result = sessionClient.reissueStudentSignature()
+                if (result?.ok == true) {
+                    logger.append(
+                        "ADMIN",
+                        "Reissue signature binding=${result.bindingId.orEmpty()} state=${result.sessionState.orEmpty()}"
+                    )
+                    TestUtils.showToast(requireContext(), "Signature siswa diterbitkan ulang.")
+                    refreshLogs()
+                } else {
+                    TestUtils.showToast(requireContext(), "Gagal reissue signature.")
+                }
+            }
+        }
+
+        revokeSessionButton.setOnClickListener {
+            lifecycleScope.launch {
+                val ready = sessionClient.ensureAdminControlSession()
+                if (!ready) {
+                    TestUtils.showToast(requireContext(), "Session admin backend tidak valid.")
+                    return@launch
+                }
+                val revoked = sessionClient.revokeSession("PROCTOR_REVOKE")
+                if (revoked) {
+                    logger.append("ADMIN", "Session di-revoke oleh proktor.")
+                    TestUtils.showToast(requireContext(), "Session diakhiri paksa.")
+                    refreshLogs()
+                } else {
+                    TestUtils.showToast(requireContext(), "Gagal revoke session.")
+                }
             }
         }
 

@@ -1,8 +1,8 @@
-import React, { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import React, { useRef } from "react";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
 import Keypad from "./Keypad";
-import Layout, { TerminalBadge, TerminalButton, terminalStyles } from "./Layout";
+import Layout, { TerminalBadge, TerminalButton, palette } from "./Layout";
 
 type LoginScreenProps = {
   language: AppLanguage;
@@ -23,110 +23,110 @@ export default function LoginScreen({
   onOpenSettings,
   onExitApp,
 }: LoginScreenProps) {
-  const [maskInput, setMaskInput] = useState(false);
+  const cursorOpacity = useRef(new Animated.Value(1)).current;
+
+  React.useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(cursorOpacity, { toValue: 0, duration: 450, useNativeDriver: true }),
+        Animated.timing(cursorOpacity, { toValue: 1, duration: 450, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [cursorOpacity]);
 
   return (
     <Layout
       title={tr(language, "Access Gate", "Access Gate")}
-      subtitle={tr(
-        language,
-        "Masukkan token sesi sementara untuk memulai.",
-        "Enter your temporary session token to continue."
-      )}
+      subtitle={tr(language, "Masukkan token sesi sementara.", "Enter your temporary session token.")}
       topRight={<TerminalBadge label={tr(language, "SESSION AUTH", "SESSION AUTH")} tone="neon" />}
       footer={
-        <View style={terminalStyles.splitRow}>
-          <View style={terminalStyles.splitCol}>
-            <TerminalButton
-              label={tr(language, "Buka Pengaturan", "Open Settings")}
-              variant="outline"
-              onPress={onOpenSettings}
-            />
-          </View>
-          <View style={terminalStyles.splitCol}>
-            <TerminalButton label={tr(language, "Keluar Aplikasi", "Exit App")} variant="outline" onPress={onExitApp} />
-          </View>
+        <View style={styles.footerRow}>
+          <Pressable style={styles.iconButton} onPress={onOpenSettings}>
+            <Text style={styles.iconText}>{tr(language, "SET", "SET")}</Text>
+          </Pressable>
+          <Pressable style={styles.iconButton} onPress={onExitApp}>
+            <Text style={styles.iconText}>{tr(language, "EXIT", "EXIT")}</Text>
+          </Pressable>
         </View>
       }
     >
-      <View style={styles.tokenPanel}>
-        <Text style={[terminalStyles.subtleText, styles.tokenLabel]}>MASTER_ID</Text>
-        <View style={styles.tokenDisplay}>
-          <Text style={styles.tokenText}>
-            {token ? (maskInput ? "*".repeat(token.length) : token) : tr(language, "____-____", "____-____")}
-          </Text>
-          <View style={styles.cursor} />
-        </View>
+      <View style={styles.tokenShell}>
+        <Text style={styles.tokenText}>{token || "____-____"}</Text>
+        <Animated.View style={[styles.cursor, { opacity: cursorOpacity }]} />
       </View>
-
-      <Pressable
-        onPress={() => setMaskInput((value) => !value)}
-        style={({ pressed }) => [terminalStyles.card, styles.maskToggle, pressed ? styles.togglePressed : null]}
-      >
-        <Text style={terminalStyles.subtleText}>
-          {maskInput
-            ? tr(language, "TAMPILKAN INPUT TOKEN", "SHOW TOKEN INPUT")
-            : tr(language, "SEMBUNYIKAN INPUT TOKEN", "HIDE TOKEN INPUT")}
-        </Text>
-      </Pressable>
+      <Text style={styles.statusText}>{statusMessage}</Text>
 
       <Keypad
         language={language}
         onPressDigit={(value) => onTokenChange(`${token}${value}`)}
         onBackspace={() => onTokenChange(token.slice(0, -1))}
         onClear={() => onTokenChange("")}
+        currentValue={token}
+        onPasteText={(value) => onTokenChange(`${token}${value}`)}
       />
 
-      <View style={terminalStyles.divider} />
-      <TerminalButton label={tr(language, "Klaim Sesi", "Claim Session")} onPress={onSubmit} />
-      <Text style={terminalStyles.subtleText}>{statusMessage}</Text>
+      <View style={styles.buttonWrap}>
+        <TerminalButton label={tr(language, "Klaim Sesi", "Claim Session")} onPress={onSubmit} />
+      </View>
     </Layout>
   );
 }
 
 const styles = StyleSheet.create({
-  tokenPanel: {
-    borderWidth: 1,
-    borderColor: "rgba(229,231,235,1)",
+  tokenShell: {
+    borderWidth: 2,
+    borderColor: "rgba(34,197,94,0.22)",
+    borderRadius: 22,
+    minHeight: 56,
     backgroundColor: "#ffffff",
-    padding: 10,
-    marginBottom: 10,
-    borderRadius: 18,
-  },
-  tokenLabel: {
-    letterSpacing: 0.8,
-    marginBottom: 4,
-  },
-  tokenDisplay: {
-    minHeight: 52,
-    borderWidth: 1,
-    borderColor: "rgba(229,231,235,1)",
-    borderRadius: 14,
-    backgroundColor: "#f9fafb",
-    paddingHorizontal: 10,
+    paddingHorizontal: 14,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    marginBottom: 8,
   },
   tokenText: {
     flex: 1,
     color: "#16a34a",
     fontFamily: "JetBrainsMono-Bold",
-    fontSize: 16,
-    letterSpacing: 1.1,
+    fontSize: 18,
+    letterSpacing: 1.2,
   },
   cursor: {
-    width: 3,
-    height: 22,
-    borderRadius: 2,
+    width: 2,
+    height: 18,
     backgroundColor: "#22c55e",
+    borderRadius: 1,
   },
-  maskToggle: {
-    paddingVertical: 8,
-    marginBottom: 2,
+  statusText: {
+    color: palette.muted,
+    fontFamily: "JetBrainsMono-Regular",
+    fontSize: 10,
+    marginBottom: 8,
+    minHeight: 20,
+  },
+  buttonWrap: {
+    marginTop: 8,
+  },
+  footerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  iconButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: palette.line,
     borderRadius: 14,
+    backgroundColor: "#ffffff",
+    paddingVertical: 10,
+    alignItems: "center",
   },
-  togglePressed: {
-    opacity: 0.8,
+  iconText: {
+    color: "#6b7280",
+    fontFamily: "JetBrainsMono-Bold",
+    fontSize: 10,
+    letterSpacing: 1,
   },
 });

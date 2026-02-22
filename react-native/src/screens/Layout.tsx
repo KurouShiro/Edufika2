@@ -16,13 +16,18 @@ import {
 
 export const palette = {
   bg: "#fdfcfb",
+  bgDeep: "#f5f7f9",
   panel: "#ffffff",
-  neon: "#22c55e",
-  neonSoft: "rgba(34,197,94,0.22)",
+  panelSoft: "#f8fafc",
   text: "#1f2937",
-  muted: "#6b7280",
-  warning: "#ef4444",
+  muted: "#9ca3af",
   line: "#e5e7eb",
+  neon: "#22c55e",
+  neonSoft: "rgba(34,197,94,0.16)",
+  blue: "#3b82f6",
+  blueSoft: "rgba(59,130,246,0.12)",
+  warning: "#ef4444",
+  warningSoft: "rgba(239,68,68,0.12)",
 } as const;
 
 const monoRegular = "JetBrainsMono-Regular";
@@ -56,12 +61,12 @@ type BadgeProps = {
 export default function Layout({ title, subtitle, topRight, children, footer }: LayoutProps) {
   const entranceOpacity = useRef(new Animated.Value(0)).current;
   const entranceTranslateY = useRef(new Animated.Value(12)).current;
-  const entranceScale = useRef(new Animated.Value(0.98)).current;
+  const entranceScale = useRef(new Animated.Value(0.985)).current;
 
   useEffect(() => {
     entranceOpacity.setValue(0);
     entranceTranslateY.setValue(12);
-    entranceScale.setValue(0.98);
+    entranceScale.setValue(0.985);
 
     Animated.parallel([
       Animated.timing(entranceOpacity, {
@@ -72,7 +77,7 @@ export default function Layout({ title, subtitle, topRight, children, footer }: 
       }),
       Animated.timing(entranceTranslateY, {
         toValue: 0,
-        duration: 260,
+        duration: 250,
         easing: Easing.out(Easing.exp),
         useNativeDriver: true,
       }),
@@ -99,7 +104,7 @@ export default function Layout({ title, subtitle, topRight, children, footer }: 
           ]}
         >
           <View style={styles.topBar}>
-            <Text style={styles.topBarText}>EDUFIKA_UI::ACTIVE</Text>
+            <Text style={styles.topBarText}>EDUFIKA::UI_V4</Text>
             {topRight}
           </View>
 
@@ -125,13 +130,13 @@ function BackgroundTexture() {
       Animated.sequence([
         Animated.timing(scanProgress, {
           toValue: 1,
-          duration: 2600,
+          duration: 2800,
           easing: Easing.linear,
           useNativeDriver: true,
         }),
         Animated.timing(scanProgress, {
           toValue: 0,
-          duration: 80,
+          duration: 90,
           easing: Easing.linear,
           useNativeDriver: true,
         }),
@@ -141,14 +146,14 @@ function BackgroundTexture() {
     const flickerLoop = Animated.loop(
       Animated.sequence([
         Animated.timing(scanOpacity, {
-          toValue: 0.05,
-          duration: 140,
+          toValue: 0.06,
+          duration: 160,
           easing: Easing.linear,
           useNativeDriver: true,
         }),
         Animated.timing(scanOpacity, {
           toValue: 0.14,
-          duration: 180,
+          duration: 220,
           easing: Easing.linear,
           useNativeDriver: true,
         }),
@@ -157,7 +162,6 @@ function BackgroundTexture() {
 
     motionLoop.start();
     flickerLoop.start();
-
     return () => {
       motionLoop.stop();
       flickerLoop.stop();
@@ -166,7 +170,7 @@ function BackgroundTexture() {
 
   const scanTranslateY = scanProgress.interpolate({
     inputRange: [0, 1],
-    outputRange: [-16, screenHeight],
+    outputRange: [-14, screenHeight],
   });
 
   return (
@@ -183,12 +187,12 @@ function BackgroundTexture() {
         ]}
       />
       <View style={styles.gridWrap}>
-        {Array.from({ length: 10 }).map((_, idx) => (
+        {Array.from({ length: 9 }).map((_, idx) => (
           <View key={`v-${idx}`} style={styles.vLine} />
         ))}
       </View>
       <View style={styles.gridWrapHorizontal}>
-        {Array.from({ length: 16 }).map((_, idx) => (
+        {Array.from({ length: 14 }).map((_, idx) => (
           <View key={`h-${idx}`} style={styles.hLine} />
         ))}
       </View>
@@ -228,7 +232,6 @@ export function TerminalInput({ label, ...props }: TerminalInputProps) {
 export function TerminalBadge({ label, tone = "neon" }: BadgeProps) {
   const badgeToneStyle =
     tone === "warning" ? terminalStyles.badgeWarning : tone === "muted" ? terminalStyles.badgeMuted : terminalStyles.badgeNeon;
-
   return (
     <View style={[terminalStyles.badge, badgeToneStyle]}>
       <Text style={terminalStyles.badgeText}>{label.toUpperCase()}</Text>
@@ -241,7 +244,7 @@ export const terminalStyles = StyleSheet.create({
     color: palette.text,
     fontFamily: monoBold,
     fontSize: 16,
-    letterSpacing: 0.4,
+    letterSpacing: 0.3,
     marginBottom: 10,
   },
   bodyText: {
@@ -254,7 +257,7 @@ export const terminalStyles = StyleSheet.create({
   subtleText: {
     color: palette.muted,
     fontFamily: monoRegular,
-    fontSize: 11,
+    fontSize: 10,
     lineHeight: 16,
     marginBottom: 6,
   },
@@ -273,7 +276,7 @@ export const terminalStyles = StyleSheet.create({
     flex: 1,
   },
   button: {
-    borderRadius: 14,
+    borderRadius: 16,
     paddingVertical: 12,
     paddingHorizontal: 12,
     marginBottom: 10,
@@ -284,17 +287,22 @@ export const terminalStyles = StyleSheet.create({
   buttonSolid: {
     backgroundColor: palette.neon,
     borderColor: palette.neon,
+    shadowColor: "#166534",
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
   },
   buttonOutline: {
-    backgroundColor: "#ffffff",
+    backgroundColor: palette.panel,
     borderColor: palette.line,
   },
   buttonPressed: {
-    opacity: 0.86,
-    transform: [{ scale: 0.988 }],
+    opacity: 0.88,
+    transform: [{ scale: 0.986 }],
   },
   buttonDisabled: {
-    opacity: 0.42,
+    opacity: 0.46,
   },
   buttonText: {
     fontFamily: monoBold,
@@ -316,27 +324,28 @@ export const terminalStyles = StyleSheet.create({
     fontSize: 10,
     marginBottom: 6,
     letterSpacing: 0.8,
+    paddingHorizontal: 2,
   },
   input: {
     borderWidth: 1,
     borderColor: palette.line,
-    borderRadius: 14,
+    borderRadius: 16,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 11,
     color: palette.text,
-    backgroundColor: "#ffffff",
+    backgroundColor: palette.panel,
     fontFamily: monoRegular,
     fontSize: 12,
   },
   card: {
     borderWidth: 1,
     borderColor: palette.line,
-    backgroundColor: "#ffffff",
-    borderRadius: 18,
+    backgroundColor: palette.panel,
+    borderRadius: 20,
     padding: 12,
     marginBottom: 10,
     shadowColor: "#0f172a",
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.06,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 2,
@@ -397,41 +406,41 @@ const styles = StyleSheet.create({
   gridWrapHorizontal: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: "space-between",
-    paddingVertical: 20,
+    paddingVertical: 18,
   },
   vLine: {
     width: 1,
-    backgroundColor: "rgba(15,23,42,0.025)",
+    backgroundColor: "rgba(15,23,42,0.018)",
   },
   hLine: {
     height: 1,
-    backgroundColor: "rgba(15,23,42,0.02)",
+    backgroundColor: "rgba(15,23,42,0.017)",
   },
   scanline: {
     position: "absolute",
     left: 0,
     right: 0,
-    top: -10,
+    top: -8,
     height: 2,
-    backgroundColor: "rgba(34,197,94,0.16)",
+    backgroundColor: "rgba(34,197,94,0.14)",
   },
   orbA: {
     position: "absolute",
     width: 230,
     height: 230,
     borderRadius: 115,
-    top: -90,
+    top: -92,
     right: -70,
-    backgroundColor: "rgba(34,197,94,0.11)",
+    backgroundColor: palette.neonSoft,
   },
   orbB: {
     position: "absolute",
-    width: 290,
-    height: 290,
-    borderRadius: 145,
-    bottom: -130,
-    left: -120,
-    backgroundColor: "rgba(59,130,246,0.08)",
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    bottom: -110,
+    left: -112,
+    backgroundColor: palette.blueSoft,
   },
   container: {
     flex: 1,
@@ -449,7 +458,7 @@ const styles = StyleSheet.create({
     color: palette.muted,
     fontFamily: monoRegular,
     fontSize: 9,
-    letterSpacing: 1.1,
+    letterSpacing: 1.05,
   },
   headerWrap: {
     marginBottom: 10,
@@ -458,9 +467,9 @@ const styles = StyleSheet.create({
   title: {
     color: palette.text,
     fontFamily: monoBold,
-    fontSize: 22,
-    letterSpacing: 0.3,
-    marginBottom: 4,
+    fontSize: 24,
+    letterSpacing: 0.2,
+    marginBottom: 3,
   },
   subtitle: {
     color: palette.muted,
@@ -472,9 +481,10 @@ const styles = StyleSheet.create({
     flex: 1,
     borderWidth: 1,
     borderColor: palette.line,
-    borderRadius: 22,
-    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: 24,
+    backgroundColor: "rgba(255,255,255,0.94)",
     padding: 12,
+    overflow: "hidden",
   },
   footer: {
     marginTop: 10,

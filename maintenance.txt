@@ -14,7 +14,7 @@ Project Scope
 
 Workspace Root
 --------------
-`C:\Users\MyBook Hype AMD\AndroidStudioProjects\Edufika2`
+`C:\Users\<PC_NAME>\AndroidStudioProjects\Edufika2`
 
 
 1) Current Runtime Topology
@@ -87,7 +87,7 @@ Active backend env (`edufika-session-api/.env`):
 - `HOST=0.0.0.0`
 - `PORT=8091`
 - `DB_DIALECT=mysql`
-- `DATABASE_URL=mysql://edufika:edufika@localhost:3307/edufika`
+- `DATABASE_URL=DATABASE_URL_HERE`
 - `ACCESS_SIGNATURE_TTL_SECONDS=300`
 - `HEARTBEAT_TIMEOUT_SECONDS=30`
 - `RISK_LOCK_THRESHOLD=12`

@@ -26,11 +26,21 @@ class UrlWhitelist : Fragment(R.layout.fragment_url_whitelist) {
         val whitelistInput = view.findViewById<EditText>(R.id.whitelistInput)
         val addButton = view.findViewById<MaterialButton>(R.id.addWhitelistButton)
         val currentWhitelistText = view.findViewById<TextView>(R.id.currentWhitelistText)
+        val studentTokenInput = view.findViewById<EditText>(R.id.studentTokenInput)
         val proctorPinInput = view.findViewById<EditText>(R.id.proctorPinInput)
         val proctorPinStatusText = view.findViewById<TextView>(R.id.proctorPinStatusText)
         val savePinButton = view.findViewById<MaterialButton>(R.id.savePinButton)
         val backButton = view.findViewById<MaterialButton>(R.id.backAdminButton)
         val sessionClient = SessionClient(requireContext())
+        val prefs = requireContext().getSharedPreferences(TestConstants.PREFS_NAME, Context.MODE_PRIVATE)
+        val cachedStudentToken = prefs.getString(TestConstants.PREF_LAST_STUDENT_TOKEN, "").orEmpty()
+        if (cachedStudentToken.isNotBlank()) {
+            studentTokenInput.setText(cachedStudentToken)
+        }
+
+        fun selectedStudentToken(): String? {
+            return studentTokenInput.text?.toString()?.trim()?.takeIf { it.isNotBlank() }
+        }
 
         fun refreshWhitelist() {
             lifecycleScope.launch {
@@ -51,19 +61,36 @@ class UrlWhitelist : Fragment(R.layout.fragment_url_whitelist) {
 
         fun refreshProctorPinStatus() {
             lifecycleScope.launch {
+                val targetToken = selectedStudentToken()
+                if (targetToken.isNullOrBlank()) {
+                    proctorPinStatusText.text = "PIN status (student token): isi student token terlebih dahulu"
+                    return@launch
+                }
                 val ready = sessionClient.ensureAdminControlSession()
-                val status = if (ready) sessionClient.getProctorPinStatus() else null
+                val status = if (ready) sessionClient.getProctorPinStatus(targetToken) else null
                 proctorPinStatusText.text = when {
-                    status == null -> "PIN status (student token): server unavailable"
-                    !status.configured -> "PIN status (student token): belum diset"
-                    status.isActiveToday -> "PIN status (student token): aktif hari ini (${status.effectiveDate})"
-                    else -> "PIN status (student token): expired (${status.effectiveDate})"
+                    status == null -> {
+                        val apiError = sessionClient.consumeLastApiError()
+                        if (apiError.isNullOrBlank()) {
+                            "PIN status ($targetToken): session admin invalid / server unavailable"
+                        } else {
+                            "PIN status ($targetToken): $apiError"
+                        }
+                    }
+                    !status.configured -> "PIN status ($targetToken): belum diset"
+                    status.isActiveToday -> "PIN status ($targetToken): aktif hari ini (${status.effectiveDate})"
+                    else -> "PIN status ($targetToken): expired (${status.effectiveDate})"
                 }
             }
         }
 
         refreshWhitelist()
         refreshProctorPinStatus()
+        studentTokenInput.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                refreshProctorPinStatus()
+            }
+        }
 
         addButton.setOnClickListener {
             val normalized = TestUtils.normalizeUrl(whitelistInput.text.toString())
@@ -113,6 +140,11 @@ class UrlWhitelist : Fragment(R.layout.fragment_url_whitelist) {
         }
 
         savePinButton.setOnClickListener {
+            val targetToken = selectedStudentToken()
+            if (targetToken.isNullOrBlank()) {
+                TestUtils.showToast(requireContext(), "Isi student token (S-...) terlebih dahulu.")
+                return@setOnClickListener
+            }
             val pin = proctorPinInput.text.toString().trim()
             if (pin.length < 4) {
                 TestUtils.showToast(requireContext(), "PIN minimal 4 digit.")
@@ -125,17 +157,27 @@ class UrlWhitelist : Fragment(R.layout.fragment_url_whitelist) {
                     TestUtils.showToast(requireContext(), "Session admin backend tidak valid.")
                     return@launch
                 }
-                val result = sessionClient.setProctorPin(pin)
+                val result = sessionClient.setProctorPin(pin, targetToken)
                 if (result != null && result.configured) {
-                    val prefs = requireContext().getSharedPreferences(TestConstants.PREFS_NAME, Context.MODE_PRIVATE)
-                    prefs.edit().putString(TestConstants.PREF_PROCTOR_PIN, pin).apply()
-                    SessionLogger(requireContext()).append("PIN", "PIN proktor diperbarui di server (${result.effectiveDate}).")
+                    prefs.edit()
+                        .putString(TestConstants.PREF_PROCTOR_PIN, pin)
+                        .putString(TestConstants.PREF_LAST_STUDENT_TOKEN, targetToken)
+                        .apply()
+                    SessionLogger(requireContext()).append(
+                        "PIN",
+                        "PIN proktor diperbarui di server untuk token $targetToken (${result.effectiveDate})."
+                    )
                     proctorPinInput.setText("")
                     refreshProctorPinStatus()
-                    TestUtils.showToast(requireContext(), "PIN siswa disimpan di server (per token sesi).")
+                    TestUtils.showToast(requireContext(), "PIN siswa disimpan untuk token $targetToken.")
                 } else {
+                    val apiError = sessionClient.consumeLastApiError()
                     SessionLogger(requireContext()).append("PIN", "Gagal menyimpan PIN proktor ke server.")
-                    TestUtils.showToast(requireContext(), "Gagal menyimpan PIN ke server.")
+                    if (apiError.isNullOrBlank()) {
+                        TestUtils.showToast(requireContext(), "Gagal menyimpan PIN ke server.")
+                    } else {
+                        TestUtils.showToast(requireContext(), "Gagal simpan PIN: $apiError")
+                    }
                 }
             }
         }

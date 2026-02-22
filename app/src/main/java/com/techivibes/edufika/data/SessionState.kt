@@ -12,6 +12,8 @@ enum class UserRole {
 }
 
 object SessionState {
+    var onStateChanged: (() -> Unit)? = null
+
     var currentToken: String = ""
         private set
     var currentRole: UserRole = UserRole.NONE
@@ -27,6 +29,10 @@ object SessionState {
     var riskScore: Int = 0
         private set
     var lastHeartbeatMillis: Long = 0L
+        private set
+    var currentExamUrl: String = ""
+        private set
+    var heartbeatSequence: Long = 0L
         private set
 
     private var sessionStartMillis: Long = 0L
@@ -50,8 +56,11 @@ object SessionState {
         riskScore = 0
         lastSignatureRotationMillis = now
         lastHeartbeatMillis = lastSignatureRotationMillis
+        currentExamUrl = ""
+        heartbeatSequence = 0L
         sessionStartMillis = now
         sessionExpiryMillis = sessionExpiresAtMillis?.let { max(now, it) } ?: (sessionStartMillis + durationMillis)
+        onStateChanged?.invoke()
     }
 
     fun isSessionExpired(): Boolean {
@@ -65,6 +74,33 @@ object SessionState {
 
     fun markHeartbeatNow() {
         lastHeartbeatMillis = System.currentTimeMillis()
+        onStateChanged?.invoke()
+    }
+
+    fun nextHeartbeatSequence(): Long {
+        heartbeatSequence += 1L
+        onStateChanged?.invoke()
+        return heartbeatSequence
+    }
+
+    fun setCurrentExamUrl(url: String) {
+        currentExamUrl = url.trim()
+        onStateChanged?.invoke()
+    }
+
+    fun restoreRuntimeState(
+        risk: Int,
+        lastSignatureRotation: Long,
+        lastHeartbeat: Long,
+        examUrl: String,
+        heartbeatSeq: Long
+    ) {
+        riskScore = risk.coerceAtLeast(0)
+        lastSignatureRotationMillis = lastSignatureRotation.coerceAtLeast(0L)
+        lastHeartbeatMillis = lastHeartbeat.coerceAtLeast(0L)
+        currentExamUrl = examUrl
+        heartbeatSequence = heartbeatSeq.coerceAtLeast(0L)
+        onStateChanged?.invoke()
     }
 
     fun heartbeatTimedOut(): Boolean {
@@ -88,7 +124,10 @@ object SessionState {
             TestConstants.EVENT_APP_BACKGROUND -> TestConstants.RISK_APP_BACKGROUND
             TestConstants.EVENT_OVERLAY_DETECTED -> TestConstants.RISK_OVERLAY_DETECTED
             TestConstants.EVENT_ACCESSIBILITY_ACTIVE -> TestConstants.RISK_ACCESSIBILITY_ACTIVE
-            TestConstants.EVENT_NETWORK_DROP -> TestConstants.RISK_NETWORK_DROP
+            TestConstants.EVENT_NETWORK_DROP -> 0
+            TestConstants.EVENT_POWER_WARNING -> 0
+            TestConstants.EVENT_RESTART_RECOVERY -> 0
+            TestConstants.EVENT_OFFLINE_HEARTBEAT_SYNC -> 0
             TestConstants.EVENT_REPEATED_VIOLATION -> TestConstants.RISK_REPEATED_VIOLATION
             TestConstants.EVENT_MULTI_WINDOW -> TestConstants.RISK_MULTI_WINDOW
             TestConstants.EVENT_FOCUS_LOST -> TestConstants.RISK_FOCUS_LOST
@@ -117,7 +156,10 @@ object SessionState {
         lastSignatureRotationMillis = 0L
         riskScore = 0
         lastHeartbeatMillis = 0L
+        currentExamUrl = ""
+        heartbeatSequence = 0L
         sessionStartMillis = 0L
         sessionExpiryMillis = 0L
+        onStateChanged?.invoke()
     }
 }

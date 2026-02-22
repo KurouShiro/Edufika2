@@ -45,8 +45,10 @@ data class LaunchConfigResponse(
 data class HeartbeatPayload(
     val focus: Boolean,
     val multiWindow: Boolean,
+    val networkState: String,
     val deviceState: String,
     val timestamp: Long,
+    val heartbeatSeq: Long,
     val riskScore: Int,
     val overlayDetected: Boolean,
     val accessibilityActive: Boolean,
@@ -60,13 +62,32 @@ data class HeartbeatResponse(
     val lock: Boolean,
     val rotateSignature: String?,
     val message: String,
-    val whitelist: List<String>
+    val whitelist: List<String>,
+    val sessionState: String
+)
+
+data class ReconnectResponse(
+    val accepted: Boolean,
+    val accessSignature: String?,
+    val expiresIn: Int,
+    val message: String,
+    val whitelist: List<String>,
+    val sessionState: String
+)
+
+data class SignatureReissueResponse(
+    val ok: Boolean,
+    val bindingId: String?,
+    val accessSignature: String?,
+    val expiresIn: Int,
+    val sessionState: String?
 )
 
 data class ProctorPinStatusResponse(
     val configured: Boolean,
     val effectiveDate: String?,
-    val isActiveToday: Boolean
+    val isActiveToday: Boolean,
+    val studentToken: String?
 )
 
 data class ProctorPinVerifyResponse(
@@ -78,6 +99,8 @@ data class ProctorPinVerifyResponse(
 class SessionClient(private val context: Context) {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    @Volatile
+    private var lastApiError: String? = null
 
     private val strictClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -130,21 +153,42 @@ class SessionClient(private val context: Context) {
         executeWithFallback(request)
     }
 
+    fun consumeLastApiError(): String? {
+        val current = lastApiError
+        lastApiError = null
+        return current
+    }
+
     private fun executeWithFallback(request: Request): JSONObject? {
+        lastApiError = null
         val strictResult = runCatching { strictClient.newCall(request).execute() }
         if (strictResult.isSuccess) {
             strictResult.getOrNull()?.use { response ->
-                if (!response.isSuccessful) return null
+                if (!response.isSuccessful) {
+                    val body = response.body?.string().orEmpty()
+                    val message = runCatching { JSONObject(body).optString("error") }.getOrNull()
+                    lastApiError = "HTTP ${response.code}${if (message.isNullOrBlank()) "" else " - $message"}"
+                    return null
+                }
                 return response.body?.string()?.takeIf { it.isNotBlank() }?.let { JSONObject(it) }
             }
+        } else {
+            lastApiError = strictResult.exceptionOrNull()?.message
         }
 
         val fallbackResult = runCatching { fallbackClient.newCall(request).execute() }
         if (fallbackResult.isSuccess) {
             fallbackResult.getOrNull()?.use { response ->
-                if (!response.isSuccessful) return null
+                if (!response.isSuccessful) {
+                    val body = response.body?.string().orEmpty()
+                    val message = runCatching { JSONObject(body).optString("error") }.getOrNull()
+                    lastApiError = "HTTP ${response.code}${if (message.isNullOrBlank()) "" else " - $message"}"
+                    return null
+                }
                 return response.body?.string()?.takeIf { it.isNotBlank() }?.let { JSONObject(it) }
             }
+        } else {
+            lastApiError = fallbackResult.exceptionOrNull()?.message ?: lastApiError
         }
 
         return null
@@ -227,8 +271,10 @@ class SessionClient(private val context: Context) {
             .put("device_binding_id", SessionState.deviceBindingId)
             .put("focus", payload.focus)
             .put("multi_window", payload.multiWindow)
+            .put("network_state", payload.networkState)
             .put("device_state", payload.deviceState)
             .put("timestamp", payload.timestamp)
+            .put("heartbeat_seq", payload.heartbeatSeq)
             .put("risk_score", payload.riskScore)
             .put("overlay_detected", payload.overlayDetected)
             .put("accessibility_active", payload.accessibilityActive)
@@ -242,11 +288,41 @@ class SessionClient(private val context: Context) {
             lock = response.optBoolean("lock", false),
             rotateSignature = response.optString("rotate_signature").ifBlank { null },
             message = response.optString("message", "heartbeat ok"),
-            whitelist = response.optJSONArray("whitelist").toStringList()
+            whitelist = response.optJSONArray("whitelist").toStringList(),
+            sessionState = response.optString("session_state", "ACTIVE")
         )
     }
 
-    suspend fun sendViolationEvent(type: String, detail: String, riskScore: Int): Boolean {
+    suspend fun reconnectSession(reason: String = "CLIENT_RECOVERY"): ReconnectResponse? {
+        if (SessionState.sessionId.isBlank() || SessionState.deviceBindingId.isBlank()) return null
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("device_binding_id", SessionState.deviceBindingId)
+            .put("device_fingerprint", SessionState.deviceBindingId)
+            .put("reason", reason)
+        if (SessionState.currentRole == UserRole.STUDENT && SessionState.currentToken.isNotBlank()) {
+            body.put("token", SessionState.currentToken)
+        }
+        if (SessionState.accessSignature.isNotBlank()) {
+            body.put("access_signature", SessionState.accessSignature)
+        }
+        val response = postJson("/session/reconnect", body) ?: return null
+        return ReconnectResponse(
+            accepted = response.optBoolean("accepted", false),
+            accessSignature = response.optString("access_signature").ifBlank { null },
+            expiresIn = response.optInt("expires_in", 0),
+            message = response.optString("message", "reconnect"),
+            whitelist = response.optJSONArray("whitelist").toStringList(),
+            sessionState = response.optString("session_state", "IN_PROGRESS")
+        )
+    }
+
+    suspend fun sendViolationEvent(
+        type: String,
+        detail: String,
+        riskScore: Int,
+        metadata: JSONObject? = null
+    ): Boolean {
         val body = JSONObject()
             .put("session_id", SessionState.sessionId)
             .put("access_signature", SessionState.accessSignature)
@@ -254,6 +330,9 @@ class SessionClient(private val context: Context) {
             .put("detail", detail)
             .put("risk_score", riskScore)
             .put("timestamp", System.currentTimeMillis())
+        if (metadata != null) {
+            body.put("metadata", metadata)
+        }
         return postJson("/session/event", body) != null
     }
 
@@ -326,26 +405,63 @@ class SessionClient(private val context: Context) {
         return postJson("/admin/revoke", body) != null
     }
 
-    suspend fun setProctorPin(pin: String): ProctorPinStatusResponse? {
+    suspend fun pauseSession(): Boolean {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+        return postJson("/admin/pause", body) != null
+    }
+
+    suspend fun resumeSession(): Boolean {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+        return postJson("/admin/resume", body) != null
+    }
+
+    suspend fun reissueStudentSignature(studentBindingId: String? = null): SignatureReissueResponse? {
+        val body = JSONObject()
+            .put("session_id", SessionState.sessionId)
+            .put("access_signature", SessionState.accessSignature)
+        if (!studentBindingId.isNullOrBlank()) {
+            body.put("student_binding_id", studentBindingId.trim())
+        }
+        val response = postJson("/admin/reissue-signature", body) ?: return null
+        return SignatureReissueResponse(
+            ok = response.optBoolean("ok", false),
+            bindingId = response.optString("binding_id").ifBlank { null },
+            accessSignature = response.optString("access_signature").ifBlank { null },
+            expiresIn = response.optInt("expires_in", 0),
+            sessionState = response.optString("session_state").ifBlank { null }
+        )
+    }
+
+    suspend fun setProctorPin(pin: String, studentToken: String? = null): ProctorPinStatusResponse? {
         val body = JSONObject()
             .put("session_id", SessionState.sessionId)
             .put("access_signature", SessionState.accessSignature)
             .put("pin", pin.trim())
+        if (!studentToken.isNullOrBlank()) {
+            body.put("student_token", studentToken.trim())
+        }
         val response = postJson("/session/proctor-pin/set", body) ?: return null
         return ProctorPinStatusResponse(
             configured = response.optBoolean("ok", false),
             effectiveDate = response.optString("effective_date").ifBlank { null },
-            isActiveToday = response.optBoolean("ok", false)
+            isActiveToday = response.optBoolean("ok", false),
+            studentToken = response.optString("student_token").ifBlank { studentToken?.trim() }
         )
     }
 
-    suspend fun getProctorPinStatus(): ProctorPinStatusResponse? {
-        val path = "/session/proctor-pin/status?session_id=${urlEncode(SessionState.sessionId)}&access_signature=${urlEncode(SessionState.accessSignature)}"
+    suspend fun getProctorPinStatus(studentToken: String? = null): ProctorPinStatusResponse? {
+        val encodedToken = studentToken?.trim()?.takeIf { it.isNotBlank() }?.let { "&student_token=${urlEncode(it)}" } ?: ""
+        val path = "/session/proctor-pin/status?session_id=${urlEncode(SessionState.sessionId)}&access_signature=${urlEncode(SessionState.accessSignature)}$encodedToken"
         val response = getJson(path) ?: return null
         return ProctorPinStatusResponse(
             configured = response.optBoolean("configured", false),
             effectiveDate = response.optString("effective_date").ifBlank { null },
-            isActiveToday = response.optBoolean("is_active_today", false)
+            isActiveToday = response.optBoolean("is_active_today", false),
+            studentToken = response.optString("student_token").ifBlank { studentToken?.trim() }
         )
     }
 
@@ -367,6 +483,15 @@ class SessionClient(private val context: Context) {
         if (hasAuth && SessionState.currentRole == UserRole.ADMIN) {
             val status = getProctorPinStatus()
             if (status != null) return true
+
+            val refreshed = reconnectSession("ADMIN_SIGNATURE_REFRESH")
+            val refreshedSignature = refreshed?.accessSignature?.takeIf { it.isNotBlank() }
+            if (refreshed?.accepted == true && refreshedSignature != null) {
+                SessionState.rotateAccessSignature(refreshedSignature)
+                val retryStatus = getProctorPinStatus()
+                if (retryStatus != null) return true
+            }
+            return false
         }
 
         val controlSession = createSessionBundle(

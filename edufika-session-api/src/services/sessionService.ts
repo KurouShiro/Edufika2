@@ -8,6 +8,7 @@ import { signAccessSignature, verifyAccessSignature } from "./tokenService";
 import { WsHub } from "./wsHub";
 
 type Role = "student" | "admin" | "developer";
+type SessionState = "ACTIVE" | "IN_PROGRESS" | "DEGRADED" | "SUSPENDED" | "PAUSED" | "LOCKED" | "REVOKED" | "FINISHED";
 
 type CreateSessionInput = {
   proctorId: string;
@@ -21,6 +22,7 @@ type ClaimSessionInput = {
   token: string;
   deviceFingerprint?: string;
   deviceBindingId?: string;
+  deviceName?: string;
   roleHint?: Role;
   ipAddress?: string;
 };
@@ -34,6 +36,7 @@ type HeartbeatInput = {
   network_state?: string;
   device_state?: string;
   timestamp: number;
+  heartbeat_seq?: number;
   risk_score?: number;
   overlay_detected?: boolean;
   accessibility_active?: boolean;
@@ -52,13 +55,22 @@ type EventInput = {
   metadata?: Record<string, unknown>;
 };
 
+type ReconnectInput = {
+  session_id: string;
+  device_binding_id: string;
+  token?: string;
+  device_fingerprint?: string;
+  access_signature?: string;
+  reason?: string;
+};
+
 type BindingAuthContext = {
   bindingId: string;
   sessionId: string;
   role: Role;
   riskScore: number;
   locked: boolean;
-  sessionStatus: string;
+  sessionStatus: SessionState;
   signatureVersion: number;
   exp?: number;
 };
@@ -244,11 +256,11 @@ export class SessionService {
       await client.query(
         `
           INSERT INTO device_bindings
-            (id, token, role, device_fingerprint, ip_address, signature_version, risk_score, locked, created_at, last_seen_at)
+            (id, token, role, device_fingerprint, ip_address, device_name, signature_version, risk_score, locked, created_at, last_seen_at)
           VALUES
-            ($1, $2, $3, $4, $5, 1, 0, FALSE, now(), now())
+            ($1, $2, $3, $4, $5, $6, 1, 0, FALSE, now(), now())
         `,
-        [bindingId, input.token, role, fingerprintHash, input.ipAddress ?? null]
+        [bindingId, input.token, role, fingerprintHash, input.ipAddress ?? null, input.deviceName?.trim() || null]
       );
 
       if (role === "student") {
@@ -261,9 +273,10 @@ export class SessionService {
             SELECT pin_hash, DATE_FORMAT(effective_date, '%Y-%m-%d') AS effective_date, updated_by_binding_id
             FROM session_student_pin_templates
             WHERE exam_session_id = $1
+              AND student_token = $2
             LIMIT 1
           `,
-          [tokenRow.exam_session_id]
+          [tokenRow.exam_session_id, tokenRow.token]
         );
 
         if ((pinTemplateResult.rowCount ?? 0) > 0) {
@@ -343,6 +356,7 @@ export class SessionService {
     rotateSignature?: string;
     message: string;
     whitelist: string[];
+    sessionState: SessionState;
   }> {
     const client = await dbPool.connect();
     try {
@@ -357,7 +371,40 @@ export class SessionService {
           lock: true,
           message: "session already locked",
           whitelist,
+          sessionState: auth.sessionStatus,
         };
+      }
+
+      if (auth.sessionStatus === "PAUSED") {
+        const whitelist = await this.getWhitelistBySession(client, auth.sessionId);
+        await client.query(
+          `
+            UPDATE device_bindings
+            SET last_seen_at = now()
+            WHERE id = $1
+          `,
+          [auth.bindingId]
+        );
+        await client.query("COMMIT");
+        return {
+          accepted: false,
+          lock: false,
+          message: "session paused by proctor",
+          whitelist,
+          sessionState: "PAUSED",
+        };
+      }
+
+      let nextSessionState: SessionState = auth.sessionStatus;
+      if (auth.sessionStatus === "DEGRADED" || auth.sessionStatus === "SUSPENDED") {
+        await this.setSessionState(client, auth.sessionId, "IN_PROGRESS");
+        nextSessionState = "IN_PROGRESS";
+        this.wsHub.broadcast("session_recovered", {
+          session_id: auth.sessionId,
+          binding_id: auth.bindingId,
+          reason: "HEARTBEAT_RECOVERED",
+          at: dayjs().toISOString(),
+        });
       }
 
       const eventRisk = calculateRisk({
@@ -380,8 +427,8 @@ export class SessionService {
           UPDATE device_bindings
           SET risk_score = $2,
               last_seen_at = now(),
-              locked = CASE WHEN $3 THEN TRUE ELSE locked END,
-              lock_reason = CASE WHEN $3 THEN $4 ELSE lock_reason END
+              locked = CASE WHEN $3 THEN TRUE ELSE FALSE END,
+              lock_reason = CASE WHEN $3 THEN $4 ELSE NULL END
           WHERE id = $1
         `,
         [auth.bindingId, nextRisk, shouldLock, shouldLock ? "RISK_THRESHOLD" : null]
@@ -405,14 +452,11 @@ export class SessionService {
       );
 
       if (shouldLock) {
-        await client.query(
-          `
-            UPDATE exam_sessions
-            SET status = 'LOCKED'
-            WHERE id = $1 AND status NOT IN ('FINISHED', 'REVOKED')
-          `,
-          [auth.sessionId]
-        );
+        await this.setSessionState(client, auth.sessionId, "LOCKED");
+        nextSessionState = "LOCKED";
+      } else if (nextSessionState === "ACTIVE") {
+        await this.setSessionState(client, auth.sessionId, "IN_PROGRESS");
+        nextSessionState = "IN_PROGRESS";
       }
 
       let rotateSignature: string | undefined;
@@ -430,6 +474,7 @@ export class SessionService {
         locked: shouldLock,
         focus: input.focus,
         multi_window: input.multi_window,
+        session_state: nextSessionState,
       });
 
       if (shouldLock) {
@@ -447,6 +492,132 @@ export class SessionService {
         rotateSignature,
         message: shouldLock ? "session locked by risk threshold" : "heartbeat ok",
         whitelist,
+        sessionState: nextSessionState,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async reconnectSession(input: ReconnectInput): Promise<{
+    accessSignature: string;
+    expiresIn: number;
+    whitelist: string[];
+    sessionState: SessionState;
+    message: string;
+  }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const bindingResult = await client.query<{
+        binding_id: string;
+        session_id: string;
+        token: string;
+        role: Role;
+        device_fingerprint: string;
+        locked: number | boolean;
+        lock_reason: string | null;
+        session_status: SessionState;
+      }>(
+        `
+          SELECT
+            db.id AS binding_id,
+            st.exam_session_id AS session_id,
+            st.token,
+            db.role,
+            db.device_fingerprint,
+            db.locked,
+            db.lock_reason,
+            es.status AS session_status
+          FROM device_bindings db
+          JOIN session_tokens st ON st.token = db.token
+          JOIN exam_sessions es ON es.id = st.exam_session_id
+          WHERE db.id = $1
+            AND st.exam_session_id = $2
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [input.device_binding_id, input.session_id]
+      );
+
+      if (bindingResult.rowCount === 0) {
+        throw new ApiError(404, "Device binding not found");
+      }
+
+      const row = bindingResult.rows[0];
+
+      if (input.token?.trim() && input.token.trim() !== row.token) {
+        throw new ApiError(401, "Token mismatch for reconnect");
+      }
+
+      if (input.device_fingerprint?.trim()) {
+        const providedHash = this.hashFingerprint(input.device_fingerprint.trim());
+        if (providedHash !== row.device_fingerprint) {
+          throw new ApiError(401, "Device fingerprint mismatch");
+        }
+      }
+
+      if (row.session_status === "FINISHED" || row.session_status === "REVOKED" || row.session_status === "LOCKED") {
+        throw new ApiError(409, `Session is ${row.session_status}`);
+      }
+
+      if (row.locked && row.lock_reason && row.lock_reason !== "HEARTBEAT_TIMEOUT") {
+        throw new ApiError(409, `Binding is locked (${row.lock_reason})`);
+      }
+
+      await client.query(
+        `
+          UPDATE device_bindings
+          SET locked = FALSE,
+              lock_reason = NULL,
+              last_seen_at = now()
+          WHERE id = $1
+        `,
+        [row.binding_id]
+      );
+
+      let nextSessionState: SessionState = row.session_status;
+      if (
+        row.role === "student" &&
+        (row.session_status === "DEGRADED" || row.session_status === "SUSPENDED" || row.session_status === "ACTIVE")
+      ) {
+        await this.setSessionState(client, row.session_id, "IN_PROGRESS");
+        nextSessionState = "IN_PROGRESS";
+      }
+
+      let reconnectAuth: BindingAuthContext | null = null;
+      if (input.access_signature?.trim()) {
+        reconnectAuth = await this.authenticateOrNull(
+          client,
+          input.session_id,
+          input.access_signature.trim(),
+          input.device_binding_id
+        );
+      }
+
+      const role = reconnectAuth?.role ?? row.role;
+      const accessSignature = await this.rotateSignature(client, row.binding_id, row.session_id, role);
+      const whitelist = await this.getWhitelistBySession(client, row.session_id);
+      await client.query("COMMIT");
+
+      this.wsHub.broadcast("session_reconnected", {
+        session_id: row.session_id,
+        binding_id: row.binding_id,
+        reason: input.reason ?? "CLIENT_RECONNECT",
+        session_state: nextSessionState,
+        at: dayjs().toISOString(),
+      });
+
+      return {
+        accessSignature,
+        expiresIn: config.accessSignatureTtlSeconds,
+        whitelist,
+        sessionState: nextSessionState,
+        message: "reconnect accepted",
       };
     } catch (error) {
       await client.query("ROLLBACK");
@@ -497,14 +668,7 @@ export class SessionService {
       );
 
       if (shouldLock) {
-        await client.query(
-          `
-            UPDATE exam_sessions
-            SET status = 'LOCKED'
-            WHERE id = $1 AND status NOT IN ('FINISHED', 'REVOKED')
-          `,
-          [auth.sessionId]
-        );
+        await this.setSessionState(client, auth.sessionId, "LOCKED");
       }
 
       await client.query("COMMIT");
@@ -593,8 +757,9 @@ export class SessionService {
   async setProctorPin(
     sessionId: string,
     accessSignature: string,
-    rawPin: string
-  ): Promise<{ effectiveDate: string }> {
+    rawPin: string,
+    studentToken?: string
+  ): Promise<{ effectiveDate: string; studentToken: string }> {
     const client = await dbPool.connect();
     try {
       await client.query("BEGIN");
@@ -608,54 +773,53 @@ export class SessionService {
         throw new ApiError(400, "Proctor PIN must be at least 4 digits");
       }
 
+      const target = await this.resolveStudentPinTarget(client, sessionId, studentToken);
       const pinHash = this.hashFingerprint(`pin:${pin}`);
       await client.query(
         `
           INSERT INTO session_student_pin_templates
-            (exam_session_id, pin_hash, effective_date, updated_by_binding_id, updated_at)
+            (exam_session_id, student_token, pin_hash, effective_date, updated_by_binding_id, updated_at)
           VALUES
-            ($1, $2, CURRENT_DATE, $3, now())
+            ($1, $2, $3, CURRENT_DATE, $4, now())
           ON DUPLICATE KEY UPDATE
+            student_token = VALUES(student_token),
             pin_hash = VALUES(pin_hash),
             effective_date = CURRENT_DATE,
             updated_by_binding_id = VALUES(updated_by_binding_id),
             updated_at = NOW()
         `,
-        [sessionId, pinHash, auth.bindingId]
+        [sessionId, target.studentToken, pinHash, auth.bindingId]
       );
 
-      await client.query(
-        `
-          INSERT INTO session_proctor_pins
-            (exam_session_id, binding_id, pin_hash, effective_date, updated_by_binding_id, updated_at)
-          SELECT
-            $1,
-            db.id,
-            $2,
-            CURRENT_DATE,
-            $3,
-            now()
-          FROM device_bindings db
-          JOIN session_tokens st ON st.token = db.token
-          WHERE st.exam_session_id = $1
-            AND db.role = 'student'
-          ON DUPLICATE KEY UPDATE
-            pin_hash = VALUES(pin_hash),
-            effective_date = CURRENT_DATE,
-            updated_by_binding_id = VALUES(updated_by_binding_id),
-            updated_at = NOW()
-        `,
-        [sessionId, pinHash, auth.bindingId]
-      );
+      if (target.bindingId) {
+        await client.query(
+          `
+            INSERT INTO session_proctor_pins
+              (exam_session_id, binding_id, pin_hash, effective_date, updated_by_binding_id, updated_at)
+            VALUES
+              ($1, $2, $3, CURRENT_DATE, $4, now())
+            ON DUPLICATE KEY UPDATE
+              pin_hash = VALUES(pin_hash),
+              effective_date = CURRENT_DATE,
+              updated_by_binding_id = VALUES(updated_by_binding_id),
+              updated_at = NOW()
+          `,
+          [sessionId, target.bindingId, pinHash, auth.bindingId]
+        );
+      }
 
       await client.query("COMMIT");
 
       const effectiveDate = dayjs().format("YYYY-MM-DD");
       this.wsHub.broadcast("proctor_pin_updated", {
         session_id: sessionId,
+        student_token: target.studentToken,
         effective_date: effectiveDate,
       });
-      return { effectiveDate };
+      return {
+        effectiveDate,
+        studentToken: target.studentToken,
+      };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -723,22 +887,61 @@ export class SessionService {
 
   async getProctorPinStatus(
     sessionId: string,
-    accessSignature: string
-  ): Promise<{ configured: boolean; effectiveDate?: string; isActiveToday: boolean }> {
+    accessSignature: string,
+    studentToken?: string
+  ): Promise<{ configured: boolean; effectiveDate?: string; isActiveToday: boolean; studentToken?: string }> {
     const client = await dbPool.connect();
     try {
       const auth = await this.authenticate(client, sessionId, accessSignature);
       if (auth.role !== "student") {
+        const requestedStudentToken = studentToken?.trim();
+        if (requestedStudentToken) {
+          const target = await this.resolveStudentPinTarget(client, sessionId, requestedStudentToken);
+          const templateResult = await client.query<{
+            effective_date: string;
+            is_active_today: number | boolean;
+          }>(
+            `
+              SELECT
+                DATE_FORMAT(effective_date, '%Y-%m-%d') AS effective_date,
+                CASE WHEN effective_date = CURRENT_DATE THEN 1 ELSE 0 END AS is_active_today
+              FROM session_student_pin_templates
+              WHERE exam_session_id = $1
+                AND student_token = $2
+              LIMIT 1
+            `,
+            [sessionId, target.studentToken]
+          );
+
+          if (templateResult.rowCount === 0) {
+            return {
+              configured: false,
+              isActiveToday: false,
+              studentToken: target.studentToken,
+            };
+          }
+
+          return {
+            configured: true,
+            effectiveDate: templateResult.rows[0].effective_date,
+            isActiveToday: toBoolean(templateResult.rows[0].is_active_today),
+            studentToken: target.studentToken,
+          };
+        }
+
         const templateResult = await client.query<{
+          student_token: string;
           effective_date: string;
           is_active_today: number | boolean;
         }>(
           `
             SELECT
+              student_token,
               DATE_FORMAT(effective_date, '%Y-%m-%d') AS effective_date,
               CASE WHEN effective_date = CURRENT_DATE THEN 1 ELSE 0 END AS is_active_today
             FROM session_student_pin_templates
             WHERE exam_session_id = $1
+            ORDER BY updated_at DESC
             LIMIT 1
           `,
           [sessionId]
@@ -755,6 +958,7 @@ export class SessionService {
           configured: true,
           effectiveDate: templateResult.rows[0].effective_date,
           isActiveToday: toBoolean(templateResult.rows[0].is_active_today),
+          studentToken: templateResult.rows[0].student_token,
         };
       }
 
@@ -966,22 +1170,332 @@ export class SessionService {
     }
   }
 
-  async lockTimedOutSessions(): Promise<Array<{ sessionId: string; bindingId: string; reason: string }>> {
+  async revokeStudentToken(
+    sessionId: string,
+    accessSignature: string,
+    studentToken: string,
+    reason?: string
+  ): Promise<{ studentToken: string; bindingIds: string[]; reason: string }> {
+    const client = await dbPool.connect();
+    const normalizedToken = studentToken.trim().toUpperCase();
+    const lockReason = reason?.trim() || "ADMIN_FORCE_LOGOUT";
+
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      if (auth.role === "student") {
+        throw new ApiError(403, "Student role cannot revoke student token");
+      }
+
+      const tokenResult = await client.query<{ token: string }>(
+        `
+          SELECT token
+          FROM session_tokens
+          WHERE exam_session_id = $1
+            AND token = $2
+            AND role = 'student'
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [sessionId, normalizedToken]
+      );
+
+      if (tokenResult.rowCount === 0) {
+        throw new ApiError(404, "Student token not found in this exam session");
+      }
+
+      await client.query(
+        `
+          UPDATE session_tokens
+          SET claimed = TRUE,
+              claimed_at = COALESCE(claimed_at, now()),
+              expires_at = CASE
+                WHEN expires_at IS NULL OR expires_at > now() THEN now()
+                ELSE expires_at
+              END
+          WHERE exam_session_id = $1
+            AND token = $2
+            AND role = 'student'
+        `,
+        [sessionId, normalizedToken]
+      );
+
+      const bindingRows = await client.query<{ binding_id: string }>(
+        `
+          SELECT db.id AS binding_id
+          FROM device_bindings db
+          JOIN session_tokens st ON st.token = db.token
+          WHERE st.exam_session_id = $1
+            AND st.token = $2
+            AND db.role = 'student'
+          FOR UPDATE
+        `,
+        [sessionId, normalizedToken]
+      );
+
+      if ((bindingRows.rowCount ?? 0) > 0) {
+        await client.query(
+          `
+            UPDATE device_bindings db
+            JOIN session_tokens st ON st.token = db.token
+            SET db.locked = TRUE,
+                db.lock_reason = $3,
+                db.signature_version = db.signature_version + 1,
+                db.last_seen_at = now()
+            WHERE st.exam_session_id = $1
+              AND st.token = $2
+              AND db.role = 'student'
+          `,
+          [sessionId, normalizedToken, lockReason]
+        );
+      }
+
+      await client.query("COMMIT");
+      this.wsHub.broadcast("student_session_revoked", {
+        session_id: sessionId,
+        student_token: normalizedToken,
+        binding_ids: bindingRows.rows.map((row) => row.binding_id),
+        by: auth.bindingId,
+        reason: lockReason,
+        at: dayjs().toISOString(),
+      });
+
+      return {
+        studentToken: normalizedToken,
+        bindingIds: bindingRows.rows.map((row) => row.binding_id),
+        reason: lockReason,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getSessionMonitor(
+    sessionId: string,
+    accessSignature: string
+  ): Promise<{
+    sessionId: string;
+    sessionState: SessionState;
+    tokens: Array<{
+      token: string;
+      role: string;
+      status: "issued" | "online" | "offline" | "revoked" | "expired";
+      claimed: boolean;
+      claimedAt: string | null;
+      expiresAt: string | null;
+      bindingId: string | null;
+      ipAddress: string | null;
+      deviceName: string | null;
+      lastSeenAt: string | null;
+      lockReason: string | null;
+    }>;
+  }> {
+    const client = await dbPool.connect();
+    try {
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      if (auth.role === "student") {
+        throw new ApiError(403, "Student role cannot access monitor data");
+      }
+
+      const rows = await client.query<{
+        token: string;
+        role: string;
+        claimed: number | boolean;
+        claimed_at: Date | string | null;
+        expires_at: Date | string | null;
+        binding_id: string | null;
+        ip_address: string | null;
+        device_name: string | null;
+        last_seen_at: Date | string | null;
+        locked: number | boolean | null;
+        lock_reason: string | null;
+        stale_seconds: number | null;
+      }>(
+        `
+          SELECT
+            st.token,
+            st.role,
+            st.claimed,
+            st.claimed_at,
+            st.expires_at,
+            db.id AS binding_id,
+            db.ip_address,
+            db.device_name,
+            db.last_seen_at,
+            db.locked,
+            db.lock_reason,
+            TIMESTAMPDIFF(SECOND, db.last_seen_at, NOW()) AS stale_seconds
+          FROM session_tokens st
+          LEFT JOIN device_bindings db ON db.token = st.token
+          WHERE st.exam_session_id = $1
+          ORDER BY st.role ASC, st.token ASC
+        `,
+        [sessionId]
+      );
+
+      const nowMs = Date.now();
+      const tokens = rows.rows.map((row) => {
+        const expiresAtMs = row.expires_at ? new Date(row.expires_at).getTime() : null;
+        const locked = toBoolean(row.locked);
+        const staleSeconds = Number(row.stale_seconds ?? 0);
+
+        let status: "issued" | "online" | "offline" | "revoked" | "expired";
+        if (expiresAtMs !== null && nowMs >= expiresAtMs) {
+          status = "expired";
+        } else if (locked) {
+          status = "revoked";
+        } else if (!toBoolean(row.claimed) || !row.binding_id) {
+          status = "issued";
+        } else if (staleSeconds > config.heartbeatTimeoutSeconds) {
+          status = "offline";
+        } else {
+          status = "online";
+        }
+
+        return {
+          token: row.token,
+          role: row.role,
+          status,
+          claimed: toBoolean(row.claimed),
+          claimedAt: row.claimed_at ? dayjs(row.claimed_at).toISOString() : null,
+          expiresAt: row.expires_at ? dayjs(row.expires_at).toISOString() : null,
+          bindingId: row.binding_id,
+          ipAddress: row.ip_address ?? null,
+          deviceName: row.device_name ?? null,
+          lastSeenAt: row.last_seen_at ? dayjs(row.last_seen_at).toISOString() : null,
+          lockReason: row.lock_reason ?? null,
+        };
+      });
+
+      return {
+        sessionId,
+        sessionState: auth.sessionStatus,
+        tokens,
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async pauseSession(sessionId: string, accessSignature: string): Promise<void> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      if (auth.role === "student") {
+        throw new ApiError(403, "Student role cannot pause session");
+      }
+      await this.setSessionState(client, sessionId, "PAUSED");
+      await client.query("COMMIT");
+      this.wsHub.broadcast("session_paused", {
+        session_id: sessionId,
+        by: auth.bindingId,
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async resumeSession(sessionId: string, accessSignature: string): Promise<void> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      if (auth.role === "student") {
+        throw new ApiError(403, "Student role cannot resume session");
+      }
+      await this.setSessionState(client, sessionId, "IN_PROGRESS");
+      await client.query("COMMIT");
+      this.wsHub.broadcast("session_resumed", {
+        session_id: sessionId,
+        by: auth.bindingId,
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async reissueStudentSignature(
+    sessionId: string,
+    accessSignature: string,
+    studentBindingId?: string
+  ): Promise<{ bindingId: string; accessSignature: string; expiresIn: number; sessionState: SessionState }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      if (auth.role === "student") {
+        throw new ApiError(403, "Student role cannot reissue signature");
+      }
+
+      const targetBindingId = await this.resolveStudentBindingId(client, sessionId, studentBindingId);
+      const signature = await this.rotateSignature(client, targetBindingId, sessionId, "student");
+      await client.query(
+        `
+          UPDATE device_bindings
+          SET locked = FALSE,
+              lock_reason = NULL,
+              last_seen_at = now()
+          WHERE id = $1
+        `,
+        [targetBindingId]
+      );
+      await this.setSessionState(client, sessionId, "IN_PROGRESS");
+      await client.query("COMMIT");
+
+      this.wsHub.broadcast("signature_reissued", {
+        session_id: sessionId,
+        binding_id: targetBindingId,
+        by: auth.bindingId,
+      });
+
+      return {
+        bindingId: targetBindingId,
+        accessSignature: signature,
+        expiresIn: config.accessSignatureTtlSeconds,
+        sessionState: "IN_PROGRESS",
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async lockTimedOutSessions(): Promise<Array<{ sessionId: string; bindingId: string; reason: string; state: SessionState }>> {
     const client = await dbPool.connect();
     try {
       await client.query("BEGIN");
 
-      const staleResult = await client.query<{ binding_id: string; session_id: string }>(
+      const staleResult = await client.query<{
+        binding_id: string;
+        session_id: string;
+        session_status: SessionState;
+        stale_seconds: number;
+      }>(
         `
-          SELECT db.id AS binding_id, st.exam_session_id AS session_id
+          SELECT
+            db.id AS binding_id,
+            st.exam_session_id AS session_id,
+            es.status AS session_status,
+            TIMESTAMPDIFF(SECOND, db.last_seen_at, NOW()) AS stale_seconds
           FROM device_bindings db
           JOIN session_tokens st ON st.token = db.token
           JOIN exam_sessions es ON es.id = st.exam_session_id
-          WHERE db.locked = FALSE
-            AND es.status IN ('ACTIVE', 'IN_PROGRESS')
-            AND db.last_seen_at < DATE_SUB(NOW(), INTERVAL $1 SECOND)
-        `,
-        [config.heartbeatTimeoutSeconds]
+          WHERE db.role = 'student'
+            AND st.role = 'student'
+            AND es.status IN ('ACTIVE', 'IN_PROGRESS', 'DEGRADED', 'SUSPENDED')
+        `
       );
 
       if (staleResult.rowCount === 0) {
@@ -989,38 +1503,51 @@ export class SessionService {
         return [];
       }
 
-      const bindingIds = staleResult.rows.map((row) => row.binding_id);
-      const sessionIds = Array.from(new Set(staleResult.rows.map((row) => row.session_id)));
+      const transitions: Array<{ sessionId: string; bindingId: string; reason: string; state: SessionState }> = [];
+      for (const row of staleResult.rows) {
+        const staleSeconds = Number(row.stale_seconds ?? 0);
+        const currentState = row.session_status;
+        let nextState: SessionState | null = null;
+        let reason = "HEARTBEAT_OK";
 
-      const bindingIn = this.buildInClause(bindingIds, 1);
-      await client.query(
-        `
-          UPDATE device_bindings
-          SET locked = TRUE,
-              lock_reason = 'HEARTBEAT_TIMEOUT'
-          WHERE id IN (${bindingIn.clause})
-        `,
-        bindingIn.params
-      );
+        if (staleSeconds >= config.heartbeatLockSeconds) {
+          nextState = "LOCKED";
+          reason = "HEARTBEAT_TIMEOUT";
+          await client.query(
+            `
+              UPDATE device_bindings
+              SET locked = TRUE, lock_reason = 'HEARTBEAT_TIMEOUT'
+              WHERE id = $1
+            `,
+            [row.binding_id]
+          );
+        } else if (staleSeconds >= config.heartbeatSuspendSeconds) {
+          nextState = "SUSPENDED";
+          reason = "HEARTBEAT_STALE_SUSPENDED";
+        } else if (staleSeconds >= config.heartbeatTimeoutSeconds) {
+          nextState = "DEGRADED";
+          reason = "HEARTBEAT_STALE_DEGRADED";
+        } else if (currentState === "DEGRADED" || currentState === "SUSPENDED") {
+          nextState = "IN_PROGRESS";
+          reason = "HEARTBEAT_RECOVERED";
+        }
 
-      const sessionIn = this.buildInClause(sessionIds, 1);
-      await client.query(
-        `
-          UPDATE exam_sessions
-          SET status = 'LOCKED'
-          WHERE id IN (${sessionIn.clause})
-            AND status NOT IN ('FINISHED', 'REVOKED')
-        `,
-        sessionIn.params
-      );
+        if (!nextState || nextState === currentState) {
+          continue;
+        }
+
+        await this.setSessionState(client, row.session_id, nextState);
+        transitions.push({
+          sessionId: row.session_id,
+          bindingId: row.binding_id,
+          reason,
+          state: nextState,
+        });
+      }
 
       await client.query("COMMIT");
 
-      return staleResult.rows.map((row) => ({
-        sessionId: row.session_id,
-        bindingId: row.binding_id,
-        reason: "HEARTBEAT_TIMEOUT",
-      }));
+      return transitions;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -1116,7 +1643,7 @@ export class SessionService {
       role: Role;
       risk_score: number;
       locked: number | boolean;
-      session_status: string;
+      session_status: SessionState;
       signature_version: number;
     }>(
       `
@@ -1160,6 +1687,91 @@ export class SessionService {
       signatureVersion: row.signature_version,
       exp: payload.exp,
     };
+  }
+
+  private async authenticateOrNull(
+    client: DbClient,
+    sessionId: string,
+    accessSignature: string,
+    expectedBindingId?: string
+  ): Promise<BindingAuthContext | null> {
+    try {
+      return await this.authenticate(client, sessionId, accessSignature, expectedBindingId);
+    } catch {
+      return null;
+    }
+  }
+
+  private async setSessionState(client: DbClient, sessionId: string, state: SessionState): Promise<void> {
+    if (state === "FINISHED" || state === "REVOKED") {
+      await client.query(
+        `
+          UPDATE exam_sessions
+          SET status = $2,
+              end_time = now()
+          WHERE id = $1
+        `,
+        [sessionId, state]
+      );
+      return;
+    }
+
+    await client.query(
+      `
+        UPDATE exam_sessions
+        SET status = $2
+        WHERE id = $1
+          AND status NOT IN ('FINISHED', 'REVOKED')
+      `,
+      [sessionId, state]
+    );
+  }
+
+  private async resolveStudentBindingId(
+    client: DbClient,
+    sessionId: string,
+    requestedBindingId?: string
+  ): Promise<string> {
+    const explicit = requestedBindingId?.trim();
+    if (explicit) {
+      const check = await client.query<{ binding_id: string }>(
+        `
+          SELECT db.id AS binding_id
+          FROM device_bindings db
+          JOIN session_tokens st ON st.token = db.token
+          WHERE db.id = $1
+            AND st.exam_session_id = $2
+            AND db.role = 'student'
+          LIMIT 1
+        `,
+        [explicit, sessionId]
+      );
+      if (check.rowCount === 0) {
+        throw new ApiError(404, "Requested student binding not found in session");
+      }
+      return explicit;
+    }
+
+    const students = await client.query<{ binding_id: string }>(
+      `
+        SELECT db.id AS binding_id
+        FROM device_bindings db
+        JOIN session_tokens st ON st.token = db.token
+        WHERE st.exam_session_id = $1
+          AND db.role = 'student'
+        ORDER BY db.created_at DESC
+        LIMIT 2
+      `,
+      [sessionId]
+    );
+
+    if (students.rowCount === 0) {
+      throw new ApiError(404, "Student binding not found for session");
+    }
+    if (students.rowCount > 1) {
+      throw new ApiError(400, "Multiple student bindings found. Provide student_binding_id.");
+    }
+    return students.rows[0].binding_id;
   }
 
   private async rotateSignature(
@@ -1226,6 +1838,69 @@ export class SessionService {
       return null;
     }
     return result.rows[0].launch_url;
+  }
+
+  private async resolveStudentPinTarget(
+    client: DbClient,
+    sessionId: string,
+    providedStudentToken?: string
+  ): Promise<{ studentToken: string; bindingId: string | null }> {
+    const explicitToken = providedStudentToken?.trim();
+    if (explicitToken) {
+      return this.loadStudentPinTarget(client, sessionId, explicitToken);
+    }
+
+    const tokenResult = await client.query<{ token: string }>(
+      `
+        SELECT token
+        FROM session_tokens
+        WHERE exam_session_id = $1
+          AND role = 'student'
+        ORDER BY token ASC
+        LIMIT 2
+      `,
+      [sessionId]
+    );
+
+    if (tokenResult.rowCount === 0) {
+      throw new ApiError(404, "Student token not found for session");
+    }
+    if (tokenResult.rowCount > 1) {
+      throw new ApiError(400, "Multiple student tokens exist. Provide student_token.");
+    }
+
+    return this.loadStudentPinTarget(client, sessionId, tokenResult.rows[0].token);
+  }
+
+  private async loadStudentPinTarget(
+    client: DbClient,
+    sessionId: string,
+    studentToken: string
+  ): Promise<{ studentToken: string; bindingId: string | null }> {
+    const targetResult = await client.query<{
+      token: string;
+      binding_id: string | null;
+    }>(
+      `
+        SELECT st.token, db.id AS binding_id
+        FROM session_tokens st
+        LEFT JOIN device_bindings db ON db.token = st.token AND db.role = 'student'
+        WHERE st.exam_session_id = $1
+          AND st.token = $2
+          AND st.role = 'student'
+        LIMIT 1
+      `,
+      [sessionId, studentToken]
+    );
+
+    if (targetResult.rowCount === 0) {
+      throw new ApiError(404, "Student token not found in this exam session");
+    }
+
+    return {
+      studentToken: targetResult.rows[0].token,
+      bindingId: targetResult.rows[0].binding_id ?? null,
+    };
   }
 
   private generateSessionToken(role: "student" | "admin"): string {
@@ -1329,7 +2004,6 @@ export class SessionService {
         SELECT *
         FROM session_student_pin_templates
         WHERE exam_session_id = $1
-        LIMIT 1
       `,
       [sessionId]
     );
@@ -1343,6 +2017,7 @@ export class SessionService {
       whitelist: whitelistResult.rows,
       browser_target: browserTargetResult.rows[0] ?? null,
       proctor_pins: proctorPinsResult.rows,
+      student_pin_templates: studentPinTemplateResult.rows,
       student_pin_template: studentPinTemplateResult.rows[0] ?? {},
     };
   }

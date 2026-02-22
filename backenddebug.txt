@@ -151,6 +151,13 @@ $s = Invoke-RestMethod -Method POST -Uri "$base/session/claim" -ContentType 'app
   role_hint = 'student'
 } | ConvertTo-Json)
 
+Invoke-RestMethod -Method POST -Uri "$base/session/proctor-pin/set" -ContentType 'application/json' -Body (@{
+  session_id = $sid
+  access_signature = $a.access_signature
+  student_token = $st
+  pin = '2468'
+} | ConvertTo-Json) | Out-Null
+
 Invoke-RestMethod -Method POST -Uri "$base/session/whitelist/add" -ContentType 'application/json' -Body (@{
   session_id = $sid
   access_signature = $a.access_signature
@@ -173,7 +180,7 @@ $hb = Invoke-RestMethod -Method POST -Uri "$base/session/heartbeat" -ContentType
   timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 } | ConvertTo-Json)
 
-"session_id=$sid whitelist_allowed=$($ok.allowed) heartbeat_ok=$($hb.accepted) lock=$($hb.lock)"
+"session_id=$sid student_token=$st whitelist_allowed=$($ok.allowed) heartbeat_ok=$($hb.accepted) lock=$($hb.lock)"
 
 
 11) DB verification queries (phpMyAdmin SQL tab)
@@ -262,4 +269,3 @@ LIMIT 20;
 5. Test LAN health: http://<PC_LAN_IP>:8091/health
 6. Set app backend URL: http://<PC_LAN_IP>:8091
 7. Run token + whitelist + heartbeat test in app
-

@@ -5,6 +5,7 @@ import {
   eventBodySchema,
   finishSessionBodySchema,
   heartbeatBodySchema,
+  reconnectBodySchema,
   proctorPinSetBodySchema,
   proctorPinStatusQuerySchema,
   proctorPinVerifyBodySchema,
@@ -45,6 +46,7 @@ export function createSessionRouter(service: SessionService): Router {
         token: parsed.token,
         deviceFingerprint: parsed.device_fingerprint,
         deviceBindingId: parsed.device_binding_id,
+        deviceName: parsed.device_name,
         roleHint: parsed.role_hint,
         ipAddress: req.ip,
       });
@@ -74,7 +76,32 @@ export function createSessionRouter(service: SessionService): Router {
         rotate_signature: result.rotateSignature,
         message: result.message,
         whitelist: result.whitelist,
-        status: result.lock ? "LOCKED" : "ACTIVE",
+        session_state: result.sessionState,
+        status: result.lock ? "LOCKED" : result.sessionState,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/reconnect", async (req, res, next) => {
+    try {
+      const parsed = reconnectBodySchema.parse(req.body);
+      const result = await service.reconnectSession({
+        session_id: parsed.session_id,
+        device_binding_id: parsed.device_binding_id,
+        token: parsed.token,
+        device_fingerprint: parsed.device_fingerprint,
+        access_signature: parsed.access_signature,
+        reason: parsed.reason,
+      });
+      res.json({
+        accepted: true,
+        access_signature: result.accessSignature,
+        expires_in: result.expiresIn,
+        session_state: result.sessionState,
+        message: result.message,
+        whitelist: result.whitelist,
       });
     } catch (error) {
       next(error);
@@ -137,10 +164,16 @@ export function createSessionRouter(service: SessionService): Router {
   router.post("/proctor-pin/set", async (req, res, next) => {
     try {
       const parsed = proctorPinSetBodySchema.parse(req.body);
-      const result = await service.setProctorPin(parsed.session_id, parsed.access_signature, parsed.pin);
+      const result = await service.setProctorPin(
+        parsed.session_id,
+        parsed.access_signature,
+        parsed.pin,
+        parsed.student_token
+      );
       res.json({
         ok: true,
         effective_date: result.effectiveDate,
+        student_token: result.studentToken,
       });
     } catch (error) {
       next(error);
@@ -164,11 +197,16 @@ export function createSessionRouter(service: SessionService): Router {
   router.get("/proctor-pin/status", async (req, res, next) => {
     try {
       const parsed = proctorPinStatusQuerySchema.parse(req.query);
-      const result = await service.getProctorPinStatus(parsed.session_id, parsed.access_signature);
+      const result = await service.getProctorPinStatus(
+        parsed.session_id,
+        parsed.access_signature,
+        parsed.student_token
+      );
       res.json({
         configured: result.configured,
         effective_date: result.effectiveDate ?? null,
         is_active_today: result.isActiveToday,
+        student_token: result.studentToken ?? null,
       });
     } catch (error) {
       next(error);
