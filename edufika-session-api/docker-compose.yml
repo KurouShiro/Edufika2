@@ -5,15 +5,39 @@ services:
     image: mariadb:11.4
     container_name: edufika-mariadb
     restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
     environment:
       MARIADB_ROOT_PASSWORD: rootpass
       MARIADB_DATABASE: edufika
       MARIADB_USER: edufika
       MARIADB_PASSWORD: edufika
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - edufika_mariadb_data:/var/lib/mysql
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: edufika-session-api
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env
+    ports:
+      - "8091:8091"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   phpmyadmin:
     image: phpmyadmin:5.2-apache

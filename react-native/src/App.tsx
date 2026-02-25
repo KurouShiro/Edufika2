@@ -50,9 +50,8 @@ type IssuedToken = {
   revokedReason?: string;
 };
 
-type TokenPinStatus = {
-  configured: boolean;
-  isActiveToday: boolean;
+type TokenPinPolicy = {
+  pin: string;
   effectiveDate: string;
 };
 
@@ -113,7 +112,7 @@ const clipboardModule: ClipboardModuleShape | undefined = (
 
 function safeCopyToClipboard(value: string): boolean {
   try {
-    clipboardModule?.setString?.(value);
+    clipboardModule?.setString?.(value);111
     return true;
   } catch {
     return false;
@@ -343,6 +342,10 @@ function formatRemainingDuration(millis: number): string {
   return [hours, minutes, seconds].map((value) => value.toString().padStart(2, "0")).join(":");
 }
 
+function todayStamp(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function generateSessionId(): string {
   const randomPart = Math.random().toString(36).slice(2, 10).toUpperCase();
   return `SES-${randomPart}`;
@@ -373,7 +376,7 @@ export default function App() {
   const [adminTokenExpiryMinutes, setAdminTokenExpiryMinutes] = useState("120");
   const [issuedTokens, setIssuedTokens] = useState<IssuedToken[]>([]);
   const [activeIssuedToken, setActiveIssuedToken] = useState("");
-  const [tokenPinStatuses, setTokenPinStatuses] = useState<Record<string, TokenPinStatus>>({});
+  const [tokenPinPolicies, setTokenPinPolicies] = useState<Record<string, TokenPinPolicy>>({});
   const [tokenLaunchPolicies, setTokenLaunchPolicies] = useState<Record<string, TokenLaunchPolicy>>({});
   const [tokenLaunchUrlInput, setTokenLaunchUrlInput] = useState("");
   const [revokeTokenInput, setRevokeTokenInput] = useState("");
@@ -419,6 +422,7 @@ export default function App() {
     tr("id", "Masukkan PIN proktor untuk keluar browser.", "Enter proctor PIN to exit browser.")
   );
   const [proctorPin, setProctorPin] = useState("4321");
+  const [proctorPinEffectiveDate, setProctorPinEffectiveDate] = useState("");
   const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
   const [sessionTimeLeftLabel, setSessionTimeLeftLabel] = useState("--:--:--");
   const [sessionExpiryHandled, setSessionExpiryHandled] = useState(false);
@@ -744,107 +748,6 @@ export default function App() {
     return payload;
   };
 
-  const fetchBackendWhitelistForSession = async (sessionIdValue: string): Promise<string[]> => {
-    const base = normalizeBackendBaseUrl(backendBaseUrl);
-    const normalizedSessionId = sessionIdValue.trim();
-    if (!base || !normalizedSessionId) {
-      return [];
-    }
-
-    const query = new URLSearchParams({ session_id: normalizedSessionId });
-    const response = await fetch(`${base}/session/whitelist?${query.toString()}`, {
-      method: "GET",
-    });
-    const payload = await parseJsonResponse(response);
-    if (!Array.isArray(payload.whitelist)) {
-      return [];
-    }
-    return payload.whitelist
-      .map((value: unknown) => normalizeUrl(value))
-      .filter((value: string) => Boolean(value));
-  };
-
-  const fetchBackendLaunchUrlForSession = async (
-    sessionIdValue: string,
-    accessSignatureValue: string
-  ): Promise<string> => {
-    const base = normalizeBackendBaseUrl(backendBaseUrl);
-    const normalizedSessionId = sessionIdValue.trim();
-    const normalizedSignature = accessSignatureValue.trim();
-    if (!base || !normalizedSessionId || !normalizedSignature) {
-      return "";
-    }
-
-    const query = new URLSearchParams({ session_id: normalizedSessionId });
-    const response = await fetch(`${base}/exam/launch?${query.toString()}`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${normalizedSignature}`,
-      },
-    });
-    const payload = await parseJsonResponse(response);
-    return normalizeUrl(payload.launch_url);
-  };
-
-  const fetchBackendPinStatusForToken = async (
-    sessionIdValue: string,
-    accessSignatureValue: string,
-    studentTokenValue: string
-  ): Promise<TokenPinStatus | null> => {
-    const base = normalizeBackendBaseUrl(backendBaseUrl);
-    const normalizedSessionId = sessionIdValue.trim();
-    const normalizedSignature = accessSignatureValue.trim();
-    const normalizedStudentToken = studentTokenValue.trim().toUpperCase();
-    if (!base || !normalizedSessionId || !normalizedSignature || !normalizedStudentToken) {
-      return null;
-    }
-
-    const query = new URLSearchParams({
-      session_id: normalizedSessionId,
-      student_token: normalizedStudentToken,
-    });
-    const response = await fetch(`${base}/session/proctor-pin/status?${query.toString()}`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${normalizedSignature}`,
-      },
-    });
-    const payload = await parseJsonResponse(response);
-    const effectiveDate = String(payload.effective_date ?? "").trim();
-    return {
-      configured: Boolean(payload.configured),
-      isActiveToday: Boolean(payload.is_active_today),
-      effectiveDate,
-    };
-  };
-
-  const syncTokenPinStatusFromBackend = async (studentTokenValue: string): Promise<boolean> => {
-    const normalizedToken = studentTokenValue.trim().toUpperCase();
-    if (!normalizedToken || !adminBackendSessionId || !adminBackendAccessSignature) {
-      return false;
-    }
-
-    try {
-      const status = await fetchBackendPinStatusForToken(
-        adminBackendSessionId,
-        adminBackendAccessSignature,
-        normalizedToken
-      );
-      if (!status) {
-        return false;
-      }
-      setTokenPinStatuses((prev) => ({
-        ...prev,
-        [normalizedToken]: status,
-      }));
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      addLog(`Backend PIN status sync failed: token=${normalizedToken} reason=${message}`);
-      return false;
-    }
-  };
-
   const loadAdminMonitor = async (): Promise<boolean> => {
     const base = normalizeBackendBaseUrl(backendBaseUrl);
     if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
@@ -1033,7 +936,6 @@ export default function App() {
     accessSignature: string;
     bindingId: string;
     launchUrl: string;
-    whitelist: string[];
     role: "student" | "admin";
     tokenExpiresAt: number | null;
   }> => {
@@ -1064,11 +966,6 @@ export default function App() {
     const bindingId = String(payload.device_binding_id ?? "").trim();
     const sessionIdFromApi = String(payload.session_id ?? "").trim();
     const launchUrl = normalizeUrl(payload.launch_url);
-    const whitelist = Array.isArray(payload.whitelist)
-      ? payload.whitelist
-          .map((value: unknown) => normalizeUrl(value))
-          .filter((value: string) => Boolean(value))
-      : [];
     const backendRole: "student" | "admin" =
       String(payload.role ?? "").toLowerCase() === "admin" ? "admin" : "student";
     const tokenExpiresAtRaw = String(payload.token_expires_at ?? "").trim();
@@ -1084,7 +981,6 @@ export default function App() {
       accessSignature,
       bindingId,
       launchUrl,
-      whitelist,
       role: backendRole,
       tokenExpiresAt,
     };
@@ -1152,46 +1048,13 @@ export default function App() {
     setScreen("LoginScreen");
   };
 
-  const openExamFlow = async (rawUrl: string, source: string, bypass = false) => {
+  const openExamFlow = (rawUrl: string, source: string, bypass = false) => {
     const tokenKey = activeStudentToken.trim().toUpperCase();
     const fallbackTokenKey = generatedToken.trim().toUpperCase();
-    let tokenBoundUrl =
+    const tokenBoundUrl =
       (tokenKey ? getTokenLaunchUrl(tokenLaunchPolicies, tokenKey) : undefined) ||
       (fallbackTokenKey ? getTokenLaunchUrl(tokenLaunchPolicies, fallbackTokenKey) : undefined);
-    let effectiveWhitelistBase = [...whitelist];
-
-    const backendSessionId = sessionId.trim();
-    const backendStudentSignature = studentBackendAccessSignature.trim();
-    if (role === "student" && backendSessionId && backendStudentSignature) {
-      try {
-        const backendWhitelist = await fetchBackendWhitelistForSession(backendSessionId);
-        effectiveWhitelistBase = backendWhitelist;
-        setWhitelist(backendWhitelist);
-
-        const backendLaunchUrl = await fetchBackendLaunchUrlForSession(
-          backendSessionId,
-          backendStudentSignature
-        );
-        if (backendLaunchUrl) {
-          const policyToken = tokenKey || fallbackTokenKey;
-          if (policyToken) {
-            setTokenLaunchPolicies((prev) => ({
-              ...prev,
-              [policyToken]: {
-                url: backendLaunchUrl,
-                updatedAt: new Date().toISOString(),
-              },
-            }));
-          }
-          tokenBoundUrl = backendLaunchUrl;
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addLog(`Backend policy sync before exam launch failed: ${message}`);
-      }
-    }
-
-    const effectiveWhitelist = mergeWhitelist(effectiveWhitelistBase, tokenBoundUrl);
+    const effectiveWhitelist = mergeWhitelist(whitelist, tokenBoundUrl);
     const resolvedUrl = normalizeUrl(rawUrl || tokenBoundUrl || effectiveWhitelist[0] || "");
     if (!resolvedUrl) {
       setInvalidUrl(rawUrl);
@@ -1315,15 +1178,7 @@ export default function App() {
         setSessionExpiresAt(expiresAt);
         setSessionExpiryHandled(false);
         setRiskScore(0);
-        setWhitelist(claimed.whitelist);
         if (resolvedRole === "student" && claimed.launchUrl) {
-          setTokenLaunchPolicies((prev) => ({
-            ...prev,
-            [tokenKey]: {
-              url: claimed.launchUrl,
-              updatedAt: new Date().toISOString(),
-            },
-          }));
           setManualUrlInput(claimed.launchUrl);
         }
         setIssuedTokens((prev) => {
@@ -1410,16 +1265,8 @@ export default function App() {
             setStudentBackendBindingId(claimed.bindingId);
             setSessionId(claimed.sessionId);
             if (claimed.launchUrl) {
-              setTokenLaunchPolicies((prev) => ({
-                ...prev,
-                [tokenKey]: {
-                  url: claimed.launchUrl,
-                  updatedAt: new Date().toISOString(),
-                },
-              }));
               setManualUrlInput(claimed.launchUrl);
             }
-            setWhitelist(claimed.whitelist);
             addLog(`Student backend claim success: token=${tokenKey} session=${claimed.sessionId}`);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -1455,35 +1302,25 @@ export default function App() {
   };
 
   const generatedTokenKey = generatedToken.trim().toUpperCase();
-  const generatedTokenPinState = generatedTokenKey ? tokenPinStatuses[generatedTokenKey] : undefined;
+  const generatedTokenPinPolicy = generatedTokenKey ? tokenPinPolicies[generatedTokenKey] : undefined;
   const generatedTokenLaunchPolicy = generatedTokenKey ? tokenLaunchPolicies[generatedTokenKey] : undefined;
   const activeTokenKey = activeStudentToken.trim().toUpperCase();
   const activeTokenLaunchUrl = activeTokenKey ? tokenLaunchPolicies[activeTokenKey]?.url : undefined;
   const effectiveStudentWhitelist = mergeWhitelist(whitelist, activeTokenLaunchUrl);
   const generatedTokenPinStatus = !generatedTokenKey
     ? tr(language, "Buat token siswa dulu untuk mengikat PIN.", "Generate a student token first to bind PIN.")
-    : !generatedTokenPinState
-      ? tr(
-          language,
-          `Status PIN backend belum tersinkron untuk token ${generatedTokenKey}.`,
-          `Backend PIN status has not synced for token ${generatedTokenKey}.`
-        )
-      : !generatedTokenPinState.configured
+    : !generatedTokenPinPolicy
+      ? tr(language, `PIN belum diset untuk token ${generatedTokenKey}.`, `PIN is not set for token ${generatedTokenKey}.`)
+      : generatedTokenPinPolicy.effectiveDate === todayStamp()
         ? tr(
             language,
-            `PIN backend belum diset untuk token ${generatedTokenKey}.`,
-            `Backend PIN is not set for token ${generatedTokenKey}.`
-          )
-        : generatedTokenPinState.isActiveToday
-        ? tr(
-            language,
-            `PIN backend aktif hari ini untuk token ${generatedTokenKey} (${generatedTokenPinState.effectiveDate || "-" }).`,
-            `Backend PIN is active today for token ${generatedTokenKey} (${generatedTokenPinState.effectiveDate || "-" }).`
+            `PIN aktif hari ini untuk token ${generatedTokenKey} (${generatedTokenPinPolicy.effectiveDate}).`,
+            `PIN active today for token ${generatedTokenKey} (${generatedTokenPinPolicy.effectiveDate}).`
           )
         : tr(
             language,
-            `PIN backend expired untuk token ${generatedTokenKey} (${generatedTokenPinState.effectiveDate || "-" }).`,
-            `Backend PIN expired for token ${generatedTokenKey} (${generatedTokenPinState.effectiveDate || "-" }).`
+            `PIN expired untuk token ${generatedTokenKey} (${generatedTokenPinPolicy.effectiveDate}).`,
+            `PIN expired for token ${generatedTokenKey} (${generatedTokenPinPolicy.effectiveDate}).`
           );
   const generatedTokenLaunchStatus = !generatedTokenKey
     ? tr(language, "Buat token siswa dulu untuk mengikat URL.", "Generate a student token first to bind URL.")
@@ -1630,7 +1467,7 @@ export default function App() {
             setShowIntegrityWarning(true);
             setScreen("ViolationScreen");
           }}
-          onSubmitPinExit={async () => {
+          onSubmitPinExit={() => {
             if (bypassWhitelist || role === "admin" || role === "developer") {
               addLog("Exam browser closed by admin/developer.");
               setScreen(
@@ -1641,86 +1478,46 @@ export default function App() {
               return;
             }
 
-            const sessionIdValue = sessionId.trim();
-            const accessSignatureValue = studentBackendAccessSignature.trim();
-            const targetToken = activeStudentToken.trim().toUpperCase();
-            const normalizedPin = pinAttempt.trim();
-            const base = normalizeBackendBaseUrl(backendBaseUrl);
+            const targetToken = activeStudentToken.toUpperCase();
+            const policy = targetToken ? tokenPinPolicies[targetToken] : undefined;
 
-            if (!normalizedPin) {
+            if (!policy) {
               const message = tr(
                 language,
-                "PIN tidak boleh kosong.",
-                "PIN cannot be empty."
+                "PIN proktor belum dikonfigurasi untuk token siswa ini.",
+                "Proctor PIN has not been configured for this student token."
               );
               setPinStatus(message);
-              addLog(`Proctor PIN rejected: empty value. token=${targetToken || "(unknown)"}`);
+              addLog(`Proctor PIN rejected: token policy not configured. token=${targetToken || "(unknown)"}`);
               return;
             }
 
-            if (!base || !sessionIdValue || !accessSignatureValue) {
+            if (policy.effectiveDate !== todayStamp()) {
               const message = tr(
                 language,
-                "Verifikasi PIN membutuhkan sesi backend aktif.",
-                "PIN verification requires an active backend session."
+                "PIN proktor token ini sudah kedaluwarsa (harian).",
+                "This token-specific proctor PIN has expired (daily policy)."
               );
               setPinStatus(message);
-              addLog(`Proctor PIN verify rejected: backend session missing. token=${targetToken || "(unknown)"}`);
+              addLog(`Proctor PIN rejected: token policy expired. token=${targetToken}`);
               return;
             }
 
-            try {
-              const response = await fetch(`${base}/session/proctor-pin/verify`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  session_id: sessionIdValue,
-                  access_signature: accessSignatureValue,
-                  pin: normalizedPin,
-                }),
-              });
-              const payload = await parseJsonResponse(response);
-              if (Boolean(payload.valid)) {
-                addLog(`Student exited exam with backend-verified proctor PIN. token=${targetToken || "(unknown)"}`);
-                if (targetToken) {
-                  updateIssuedToken(targetToken, { status: "offline", lastSeenAt: Date.now() });
-                }
-                setScreen("ExamSelectionScreen");
-                return;
-              }
-
-              const reason = String(payload.reason ?? "PIN_INVALID").toUpperCase();
-              const message =
-                reason === "PIN_NOT_SET"
-                  ? tr(
-                      language,
-                      "PIN proktor backend belum diset untuk sesi ini.",
-                      "Backend proctor PIN is not set for this session."
-                    )
-                  : reason === "PIN_EXPIRED"
-                    ? tr(
-                        language,
-                        "PIN proktor backend sudah kedaluwarsa (harian).",
-                        "Backend proctor PIN has expired (daily policy)."
-                      )
-                    : tr(
-                        language,
-                        "PIN tidak valid. Hanya proktor yang bisa menutup sesi.",
-                        "Invalid PIN. Only proctor can close this session."
-                      );
-              setPinStatus(message);
-              addLog(`Backend proctor PIN rejected: token=${targetToken || "(unknown)"} reason=${reason}`);
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              setPinStatus(
-                tr(
-                  language,
-                  "Verifikasi PIN backend gagal. Coba lagi.",
-                  "Backend PIN verification failed. Please retry."
-                )
-              );
-              addLog(`Backend proctor PIN verify failed: token=${targetToken || "(unknown)"} reason=${message}`);
+            if (pinAttempt.trim() === policy.pin.trim()) {
+              addLog(`Student exited exam with valid proctor PIN. token=${targetToken}`);
+              updateIssuedToken(targetToken, { status: "offline", lastSeenAt: Date.now() });
+              setScreen("ExamSelectionScreen");
+              return;
             }
+
+            setPinStatus(
+              tr(
+                language,
+                "PIN tidak valid. Hanya proktor yang bisa menutup sesi.",
+                "Invalid PIN. Only proctor can close this session."
+              )
+            );
+            addLog("Invalid proctor PIN attempt on exam exit.");
           }}
           onDismissIntegrityWarning={() => setShowIntegrityWarning(false)}
         />
@@ -1785,13 +1582,39 @@ export default function App() {
             return;
           }
 
+          setTokenLaunchPolicies((prev) => ({
+            ...prev,
+            [targetToken]: {
+              url: normalizedUrl,
+              updatedAt: new Date().toISOString(),
+            },
+          }));
+          setWhitelist((prev) => {
+            const next = new Set(prev.map((entry) => normalizeUrl(entry)));
+            next.add(normalizedUrl);
+            return Array.from(next);
+          });
+          setTokenLaunchUrlInput(normalizedUrl);
+          addLog(`Token URL binding saved. token=${targetToken} url=${normalizedUrl}`);
+
           const base = normalizeBackendBaseUrl(backendBaseUrl);
           if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
-            addLog("Token URL binding rejected: backend admin session not active.");
+            addLog("Token URL binding synced locally only (backend admin session not active).");
             return;
           }
 
           try {
+            const whitelistResponse = await fetch(`${base}/session/whitelist/add`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                session_id: adminBackendSessionId,
+                access_signature: adminBackendAccessSignature,
+                url: normalizedUrl,
+              }),
+            });
+            await parseJsonResponse(whitelistResponse);
+
             const launchResponse = await fetch(`${base}/exam/launch`, {
               method: "POST",
               headers: {
@@ -1803,29 +1626,15 @@ export default function App() {
                 launch_url: normalizedUrl,
               }),
             });
-            const launchPayload = await parseJsonResponse(launchResponse);
-            const savedLaunchUrl = normalizeUrl(launchPayload.launch_url ?? normalizedUrl) || normalizedUrl;
-
-            setTokenLaunchPolicies((prev) => ({
-              ...prev,
-              [targetToken]: {
-                url: savedLaunchUrl,
-                updatedAt: new Date().toISOString(),
-              },
-            }));
-            setTokenLaunchUrlInput(savedLaunchUrl);
-
-            const backendWhitelist = await fetchBackendWhitelistForSession(adminBackendSessionId);
-            setWhitelist(backendWhitelist);
-
-            addLog(`Backend token URL binding saved. token=${targetToken} url=${savedLaunchUrl}`);
+            await parseJsonResponse(launchResponse);
+            addLog(`Backend whitelist synced for token URL. session=${adminBackendSessionId}`);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            addLog(`Backend token URL binding failed: ${message}`);
+            addLog(`Backend whitelist sync failed: ${message}`);
           }
         }}
         onProctorPinChange={setProctorPin}
-        onSaveProctorPin={async () => {
+        onSaveProctorPin={() => {
           if (proctorPin.trim().length < 4) {
             addLog("Proctor PIN update rejected: minimum 4 digits.");
             return;
@@ -1835,35 +1644,16 @@ export default function App() {
             addLog("Proctor PIN update rejected: no student token selected.");
             return;
           }
-
-          const base = normalizeBackendBaseUrl(backendBaseUrl);
-          if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
-            addLog("Proctor PIN update rejected: backend admin session not active.");
-            return;
-          }
-
-          try {
-            const response = await fetch(`${base}/session/proctor-pin/set`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                session_id: adminBackendSessionId,
-                access_signature: adminBackendAccessSignature,
-                pin: proctorPin.trim(),
-                student_token: targetToken,
-              }),
-            });
-            const payload = await parseJsonResponse(response);
-            const syncedToken = String(payload.student_token ?? targetToken).trim().toUpperCase() || targetToken;
-            const effectiveDate = String(payload.effective_date ?? "").trim();
-            await syncTokenPinStatusFromBackend(syncedToken);
-            addLog(
-              `Backend proctor PIN updated for token ${syncedToken}. effective_date=${effectiveDate || "-"}`
-            );
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            addLog(`Backend proctor PIN update failed: ${message}`);
-          }
+          const effectiveDate = todayStamp();
+          setTokenPinPolicies((prev) => ({
+            ...prev,
+            [targetToken]: {
+              pin: proctorPin.trim(),
+              effectiveDate,
+            },
+          }));
+          setProctorPinEffectiveDate(effectiveDate);
+          addLog(`Proctor PIN updated for student token ${targetToken}. effective_date=${effectiveDate}`);
         }}
         onRevokeTokenInputChange={setRevokeTokenInput}
         onRevokeStudentToken={async () => {
@@ -2156,9 +1946,6 @@ export default function App() {
               });
               return next;
             });
-            const backendWhitelist = await fetchBackendWhitelistForSession(remote.sessionId);
-            setWhitelist(backendWhitelist);
-            await syncTokenPinStatusFromBackend(remote.studentToken);
             await loadAdminMonitor();
             addLog(
               `Backend session created: ${remote.sessionId} | student_token=${remote.studentToken} | ttl=${expiryMinutes}m`
@@ -2238,10 +2025,13 @@ export default function App() {
             addLog(`Whitelist duplicate ignored: ${normalized}`);
             return;
           }
+          setWhitelist((prev) => [...prev, normalized]);
+          setWhitelistInput("");
+          addLog(`Whitelist URL added: ${normalized}`);
 
           const base = normalizeBackendBaseUrl(backendBaseUrl);
           if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
-            addLog("Whitelist add rejected: backend admin session not active.");
+            addLog("Whitelist saved locally only (backend admin session not active).");
             return;
           }
 
@@ -2256,16 +2046,13 @@ export default function App() {
               }),
             });
             await parseJsonResponse(response);
-            const backendWhitelist = await fetchBackendWhitelistForSession(adminBackendSessionId);
-            setWhitelist(backendWhitelist);
-            setWhitelistInput("");
-            addLog(`Whitelist synced from backend: ${normalized}`);
+            addLog(`Whitelist synced to backend: ${normalized}`);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             addLog(`Whitelist backend sync failed: ${message}`);
           }
         }}
-        onSavePin={async () => {
+        onSavePin={() => {
           if (proctorPin.trim().length < 4) {
             addLog("Proctor PIN update rejected: minimum 4 digits.");
             return;
@@ -2275,35 +2062,16 @@ export default function App() {
             addLog("Proctor PIN update rejected: no student token selected.");
             return;
           }
-
-          const base = normalizeBackendBaseUrl(backendBaseUrl);
-          if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
-            addLog("Proctor PIN update rejected: backend admin session not active.");
-            return;
-          }
-
-          try {
-            const response = await fetch(`${base}/session/proctor-pin/set`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                session_id: adminBackendSessionId,
-                access_signature: adminBackendAccessSignature,
-                pin: proctorPin.trim(),
-                student_token: targetToken,
-              }),
-            });
-            const payload = await parseJsonResponse(response);
-            const syncedToken = String(payload.student_token ?? targetToken).trim().toUpperCase() || targetToken;
-            const effectiveDate = String(payload.effective_date ?? "").trim();
-            await syncTokenPinStatusFromBackend(syncedToken);
-            addLog(
-              `Backend proctor PIN updated for token ${syncedToken}. effective_date=${effectiveDate || "-"}`
-            );
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            addLog(`Backend proctor PIN update failed: ${message}`);
-          }
+          const effectiveDate = todayStamp();
+          setTokenPinPolicies((prev) => ({
+            ...prev,
+            [targetToken]: {
+              pin: proctorPin.trim(),
+              effectiveDate,
+            },
+          }));
+          setProctorPinEffectiveDate(effectiveDate);
+          addLog(`Proctor PIN updated for student token ${targetToken}. effective_date=${effectiveDate}`);
         }}
         onBack={() => setScreen("AdminDashboardPanel")}
       />
