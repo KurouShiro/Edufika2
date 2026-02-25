@@ -42,14 +42,14 @@ const styles = StyleSheet.create({
   },
   alertTitle: {
     color: palette.warning,
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 12,
     letterSpacing: 0.8,
     marginBottom: 6,
   },
   alertBody: {
     color: "#ef4444",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 11,
     lineHeight: 17,
   },

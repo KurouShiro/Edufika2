@@ -4,7 +4,7 @@ Frontend screen set based on `prompts.txt` with:
 
 - Minimalist terminal aesthetic
 - Neon green palette
-- JetBrains Mono font family
+- Montserrat font family
 - Required screen files and flow scaffolding
 
 ## Screen Flow
@@ -25,12 +25,15 @@ Frontend screen set based on `prompts.txt` with:
 
 ## Font
 
-UI styles target JetBrains Mono family:
+UI styles target Montserrat family:
 
-- `JetBrainsMono-Regular`
-- `JetBrainsMono-Bold`
+- `Montserrat-Regular`
+- `Montserrat-Bold`
 
-Font assets are now included under `react-native/assets/fonts`.
+Place these files in `react-native/assets/fonts`:
+
+- `Montserrat-Regular.ttf`
+- `Montserrat-Bold.ttf`
 
 Run:
 

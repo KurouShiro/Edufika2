@@ -5,7 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
-import android.media.RingtoneManager
+import android.media.MediaPlayer
+import com.techivibes.edufika.R
 
 class ScreenOffReceiver : BroadcastReceiver() {
 
@@ -16,27 +17,37 @@ class ScreenOffReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        private var activeRingtone: android.media.Ringtone? = null
+        private var activeMediaPlayer: MediaPlayer? = null
 
         fun triggerAlarm(context: Context) {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             forceMaxVolume(audioManager)
 
-            val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val ringtone = RingtoneManager.getRingtone(context, alarmUri)
-            ringtone?.audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            runCatching { activeRingtone?.stop() }
-            activeRingtone = ringtone
-            ringtone?.play()
+            runCatching { activeMediaPlayer?.stop() }
+            runCatching { activeMediaPlayer?.release() }
+
+            val mediaPlayer = MediaPlayer.create(context.applicationContext, R.raw.fahhhhhhhhhhhhhh) ?: return
+            mediaPlayer.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            mediaPlayer.isLooping = false
+            mediaPlayer.setOnCompletionListener { player ->
+                runCatching { player.release() }
+                if (activeMediaPlayer === player) {
+                    activeMediaPlayer = null
+                }
+            }
+            activeMediaPlayer = mediaPlayer
+            mediaPlayer.start()
         }
 
         fun stopAlarm() {
-            runCatching { activeRingtone?.stop() }
-            activeRingtone = null
+            runCatching { activeMediaPlayer?.stop() }
+            runCatching { activeMediaPlayer?.release() }
+            activeMediaPlayer = null
         }
 
         private fun forceMaxVolume(audioManager: AudioManager) {

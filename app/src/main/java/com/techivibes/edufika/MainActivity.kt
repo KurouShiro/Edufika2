@@ -34,6 +34,13 @@ import com.techivibes.edufika.utils.TestUtils
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        const val EXTRA_SKIP_RN_UI_BOOT = "extra_skip_rn_ui_boot"
+        private const val PREF_RN_BOOT_PENDING = "pref_rn_boot_pending"
+        private const val PREF_RN_BOOT_PENDING_AT = "pref_rn_boot_pending_at"
+        private const val RN_BOOT_FAIL_WINDOW_MS = 20_000L
+    }
+
     private lateinit var navController: NavController
     private lateinit var backgroundViolationTest: BackgroundViolationTest
     private lateinit var screenOffViolationTest: ScreenOffViolationTest
@@ -77,6 +84,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (shouldLaunchReactNativeUi()) {
+            markRnBootPending()
+            startActivity(Intent(this, ReactNativeHostActivity::class.java))
+            finish()
+            return
+        }
         window.setFlags(
             WindowManager.LayoutParams.FLAG_SECURE,
             WindowManager.LayoutParams.FLAG_SECURE
@@ -131,7 +144,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        focusMonitor.refreshSignals()
+        if (::focusMonitor.isInitialized) {
+            focusMonitor.refreshSignals()
+        }
         HeartbeatService.start(this)
         startSessionExpiryWatcher()
         if (isKioskModeEnabled()) {
@@ -140,8 +155,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        ProcessLifecycleOwner.get().lifecycle.removeObserver(backgroundViolationTest)
-        screenOffViolationTest.unregister()
+        if (::backgroundViolationTest.isInitialized) {
+            ProcessLifecycleOwner.get().lifecycle.removeObserver(backgroundViolationTest)
+        }
+        if (::screenOffViolationTest.isInitialized) {
+            screenOffViolationTest.unregister()
+        }
         unregisterInternalReceivers()
         HeartbeatService.stop(this)
         sessionExpiryHandler.removeCallbacks(sessionExpiryRunnable)
@@ -151,12 +170,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        focusMonitor.onWindowFocusChanged(hasFocus)
+        if (::focusMonitor.isInitialized) {
+            focusMonitor.onWindowFocusChanged(hasFocus)
+        }
     }
 
     override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean) {
         super.onMultiWindowModeChanged(isInMultiWindowMode)
-        focusMonitor.onMultiWindowModeChanged(isInMultiWindowMode)
+        if (::focusMonitor.isInitialized) {
+            focusMonitor.onMultiWindowModeChanged(isInMultiWindowMode)
+        }
     }
 
     private fun registerInternalReceivers() {
@@ -264,6 +287,44 @@ class MainActivity : AppCompatActivity() {
         getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
             .edit()
             .putBoolean(TestConstants.PREF_APP_LOCK_ENABLED, true)
+            .apply()
+    }
+
+    private fun shouldLaunchReactNativeUi(): Boolean {
+        val skipRnBoot = intent?.getBooleanExtra(EXTRA_SKIP_RN_UI_BOOT, false) ?: false
+        if (skipRnBoot) {
+            clearRnBootPending()
+            return false
+        }
+
+        val prefs = getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
+        val pending = prefs.getBoolean(PREF_RN_BOOT_PENDING, false)
+        val pendingAt = prefs.getLong(PREF_RN_BOOT_PENDING_AT, 0L)
+        if (pending) {
+            val ageMs = System.currentTimeMillis() - pendingAt
+            if (ageMs in 0 until RN_BOOT_FAIL_WINDOW_MS) {
+                clearRnBootPending()
+                return false
+            }
+            clearRnBootPending()
+        }
+
+        return true
+    }
+
+    private fun markRnBootPending() {
+        getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_RN_BOOT_PENDING, true)
+            .putLong(PREF_RN_BOOT_PENDING_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    private fun clearRnBootPending() {
+        getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_RN_BOOT_PENDING, false)
+            .remove(PREF_RN_BOOT_PENDING_AT)
             .apply()
     }
 

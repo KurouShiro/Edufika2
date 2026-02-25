@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
   },
   iconText: {
     color: palette.neon,
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 24,
     letterSpacing: 1,
   },
@@ -77,13 +77,13 @@ const styles = StyleSheet.create({
   },
   rowLabel: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 0.5,
   },
   rowValue: {
     color: "#1f2937",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 11,
   },
 });

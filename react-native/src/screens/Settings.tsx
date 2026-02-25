@@ -1,19 +1,27 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
-import Layout, { TerminalButton, palette } from "./Layout";
+import Layout, { ThemeId, TerminalButton, palette, themePresets } from "./Layout";
 
 type SettingsScreenProps = {
   language: AppLanguage;
+  themeId: ThemeId;
   onSelectLanguage: (language: AppLanguage) => void;
+  onSelectTheme: (themeId: ThemeId) => void;
   onBack: () => void;
 };
 
-export default function Settings({ language, onSelectLanguage, onBack }: SettingsScreenProps) {
+export default function Settings({
+  language,
+  themeId,
+  onSelectLanguage,
+  onSelectTheme,
+  onBack,
+}: SettingsScreenProps) {
   return (
     <Layout
       title={tr(language, "Settings", "Settings")}
-      subtitle={tr(language, "Konfigurasi bahasa aplikasi.", "Application language configuration.")}
+      subtitle={tr(language, "Konfigurasi bahasa dan tema aplikasi.", "Language and theme configuration.")}
     >
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>{tr(language, "Language", "Language").toUpperCase()}</Text>
@@ -31,12 +39,43 @@ export default function Settings({ language, onSelectLanguage, onBack }: Setting
         </View>
       </View>
 
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>{tr(language, "Theme", "Theme").toUpperCase()}</Text>
+        <View style={styles.themeGrid}>
+          {themePresets.map((preset) => {
+            const active = preset.id === themeId;
+            const label = language === "id" ? preset.labelId : preset.labelEn;
+            return (
+              <Pressable
+                key={preset.id}
+                onPress={() => onSelectTheme(preset.id)}
+                style={[
+                  styles.themeCard,
+                  active
+                    ? {
+                        borderColor: palette.neon,
+                        backgroundColor: preset.palette.neonSoft,
+                      }
+                    : null,
+                ]}
+              >
+                <View style={styles.gradientPreview}>
+                  <View style={[styles.gradientLeft, { backgroundColor: preset.palette.gradientStart }]} />
+                  <View style={[styles.gradientRight, { backgroundColor: preset.palette.gradientEnd }]} />
+                </View>
+                <Text style={[styles.themeLabel, active ? { color: palette.text } : null]}>{label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
       <View style={styles.note}>
         <Text style={styles.noteText}>
           {tr(
             language,
-            "Perubahan bahasa diterapkan langsung pada alur sesi aktif.",
-            "Language changes apply immediately in the active session flow."
+            "Perubahan bahasa dan tema diterapkan langsung pada alur sesi aktif.",
+            "Language and theme changes apply immediately in the active session flow."
           )}
         </Text>
       </View>
@@ -65,7 +104,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 0.8,
     marginBottom: 8,
@@ -73,6 +112,40 @@ const styles = StyleSheet.create({
   langRow: {
     flexDirection: "row",
     gap: 8,
+  },
+  themeGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  themeCard: {
+    width: "48%",
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 14,
+    padding: 8,
+    backgroundColor: "#ffffff",
+  },
+  gradientPreview: {
+    height: 28,
+    borderRadius: 10,
+    overflow: "hidden",
+    flexDirection: "row",
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+  },
+  gradientLeft: {
+    flex: 1,
+  },
+  gradientRight: {
+    flex: 1,
+  },
+  themeLabel: {
+    color: "#4b5563",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 10,
+    textAlign: "center",
   },
   langBtn: {
     flex: 1,
@@ -89,7 +162,7 @@ const styles = StyleSheet.create({
   },
   langBtnText: {
     color: "#6b7280",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 11,
   },
   langBtnTextActive: {
@@ -105,7 +178,7 @@ const styles = StyleSheet.create({
   },
   noteText: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 15,
   },

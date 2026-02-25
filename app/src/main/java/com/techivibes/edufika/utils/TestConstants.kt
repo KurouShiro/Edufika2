@@ -33,9 +33,10 @@ object TestConstants {
     const val ARG_DEVELOPER_BYPASS = "developerBypass"
     const val ARG_VIOLATION_MESSAGE = "violationMessage"
 
-    const val SERVER_BASE_URL = "https://edufika.local"
-    const val TLS_PIN_HOST = "edufika.local"
+    const val SERVER_BASE_URL = "https://merrilee-interangular-ula.ngrok-free.dev"
+    const val TLS_PIN_HOST = "merrilee-interangular-ula.ngrok-free.dev"
     const val TLS_PIN_SHA256 = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    const val ADMIN_CREATE_KEY = "ed9314856e2e74de0965f657da218b5531988e483f786bd377a68e41cc79cd02ba41b9f47d63c6b50f3c3fc6743010d15090d4bf98c1112a47e6271d449987fa"
     const val DEFAULT_TOKEN_EXPIRY_MINUTES = 120
     const val MIN_TOKEN_EXPIRY_MINUTES = 1
     const val MAX_TOKEN_EXPIRY_MINUTES = 43200

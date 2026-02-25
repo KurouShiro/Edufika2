@@ -86,14 +86,14 @@ const styles = StyleSheet.create({
   },
   lineText: {
     color: "#22c55e",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 11,
     lineHeight: 18,
     marginBottom: 2,
   },
   statusText: {
     color: palette.muted,
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     marginBottom: 12,
     letterSpacing: 0.5,
@@ -120,7 +120,7 @@ const styles = StyleSheet.create({
   footer: {
     textAlign: "center",
     color: "rgba(156,163,175,0.6)",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 8,
     letterSpacing: 1.5,
     marginTop: 2,

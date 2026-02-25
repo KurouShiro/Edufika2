@@ -5,10 +5,20 @@ function parseIntEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function requireEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
 export const config = {
   port: parseIntEnv("PORT", 8088),
   host: process.env.HOST || "0.0.0.0",
-  jwtSecret: process.env.JWT_SECRET || "dev-only-secret",
+  jwtSecret: requireEnv("JWT_SECRET"),
+  adminCreateKey: process.env.ADMIN_CREATE_KEY?.trim() || "",
+  wsAuthToken: process.env.WS_AUTH_TOKEN?.trim() || "",
   defaultTokenTtlMinutes: parseIntEnv("DEFAULT_TOKEN_TTL_MINUTES", 120),
   accessSignatureTtlSeconds: parseIntEnv("ACCESS_SIGNATURE_TTL_SECONDS", 300),
   heartbeatTimeoutSeconds: parseIntEnv("HEARTBEAT_TIMEOUT_SECONDS", 30),

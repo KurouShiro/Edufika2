@@ -5,10 +5,12 @@ import android.os.Bundle
 import android.view.View
 import android.widget.EditText
 import android.widget.TextView
+import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.navigation.fragment.findNavController
 import com.google.android.material.button.MaterialButton
+import com.techivibes.edufika.BuildConfig
 import com.techivibes.edufika.R
 import com.techivibes.edufika.ReactNativeHostActivity
 import com.techivibes.edufika.data.SessionLogger
@@ -28,6 +30,8 @@ class LoginTest : Fragment(R.layout.fragment_login_test) {
         val tokenInput = view.findViewById<EditText>(R.id.tokenInput)
         val loginButton = view.findViewById<MaterialButton>(R.id.loginButton)
         val loginMessage = view.findViewById<TextView>(R.id.loginMessage)
+        val debugTokensLabel = view.findViewById<TextView>(R.id.debugTokensLabel)
+        val debugButtonsRow = view.findViewById<View>(R.id.debugButtonsRow)
         val debugStudentButton = view.findViewById<MaterialButton>(R.id.debugStudentButton)
         val debugAdminButton = view.findViewById<MaterialButton>(R.id.debugAdminButton)
         val debugDeveloperButton = view.findViewById<MaterialButton>(R.id.debugDeveloperButton)
@@ -35,7 +39,15 @@ class LoginTest : Fragment(R.layout.fragment_login_test) {
         val openRnUiButton = view.findViewById<MaterialButton>(R.id.openRnUiButton)
         val exitAppButton = view.findViewById<MaterialButton>(R.id.exitAppButton)
         val loginTitleText = view.findViewById<TextView>(R.id.loginTitleText)
+        val devToolsEnabled = BuildConfig.DEV_TOOLS_ENABLED
         sessionViewModel.resetToLoginPrompt()
+
+        debugTokensLabel.isVisible = devToolsEnabled
+        debugButtonsRow.isVisible = devToolsEnabled
+        debugStudentButton.isVisible = devToolsEnabled
+        debugAdminButton.isVisible = devToolsEnabled
+        debugDeveloperButton.isVisible = devToolsEnabled
+        emergencyKioskOffButton.isVisible = devToolsEnabled
 
         loginButton.setOnClickListener {
             sessionViewModel.authenticate(requireContext().applicationContext, tokenInput.text.toString())
@@ -54,6 +66,9 @@ class LoginTest : Fragment(R.layout.fragment_login_test) {
         }
 
         emergencyKioskOffButton.setOnClickListener {
+            if (!devToolsEnabled) {
+                return@setOnClickListener
+            }
             TestUtils.disableKioskForDebug(requireContext(), activity = requireActivity())
             TestUtils.showToast(requireContext(), "Kiosk dimatikan untuk mode debug.")
         }
@@ -85,6 +100,9 @@ class LoginTest : Fragment(R.layout.fragment_login_test) {
         }
 
         loginTitleText.setOnLongClickListener {
+            if (!devToolsEnabled) {
+                return@setOnLongClickListener false
+            }
             TestUtils.disableKioskForDebug(requireContext(), activity = requireActivity())
             TestUtils.showToast(requireContext(), "Emergency unlock aktif.")
             true
@@ -109,6 +127,15 @@ class LoginTest : Fragment(R.layout.fragment_login_test) {
                 }
 
                 UserRole.DEVELOPER -> {
+                    if (!devToolsEnabled) {
+                        sessionViewModel.consumeLoginResult()
+                        SessionLogger(requireContext()).append(
+                            "LOGIN",
+                            "Developer access blocked in production build."
+                        )
+                        TestUtils.showToast(requireContext(), "Developer access tidak tersedia.")
+                        return@observe
+                    }
                     sessionViewModel.consumeLoginResult()
                     SessionLogger(requireContext()).append("LOGIN", "Developer access login.")
                     findNavController().navigate(R.id.developerAccessPanel)

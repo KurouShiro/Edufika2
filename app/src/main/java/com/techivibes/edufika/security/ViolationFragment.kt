@@ -6,6 +6,7 @@ import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.navigation.fragment.findNavController
 import com.google.android.material.button.MaterialButton
+import com.techivibes.edufika.BuildConfig
 import com.techivibes.edufika.R
 import com.techivibes.edufika.data.SessionState
 import com.techivibes.edufika.navigation.FragmentNavigationTest
@@ -25,7 +26,11 @@ class ViolationFragment : Fragment(R.layout.fragment_violation) {
         view.findViewById<MaterialButton>(R.id.violationBackButton).setOnClickListener {
             ScreenOffReceiver.stopAlarm()
             SessionState.clear()
-            TestUtils.disableKioskForDebug(requireContext(), activity = requireActivity())
+            if (BuildConfig.DEV_TOOLS_ENABLED) {
+                TestUtils.disableKioskForDebug(requireContext(), activity = requireActivity())
+            } else {
+                TestUtils.enableKiosk(requireContext(), activity = requireActivity())
+            }
             FragmentNavigationTest.goToLoginResetStack(findNavController())
         }
     }

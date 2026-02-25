@@ -103,7 +103,7 @@ const styles = StyleSheet.create({
   },
   iconText: {
     color: "#1f2937",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 12,
     letterSpacing: 1,
   },
@@ -112,13 +112,13 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     color: "#1f2937",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 13,
     marginBottom: 2,
   },
   cardSub: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 14,
   },
@@ -132,7 +132,7 @@ const styles = StyleSheet.create({
   },
   disclaimerText: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 9,
     lineHeight: 14,
   },

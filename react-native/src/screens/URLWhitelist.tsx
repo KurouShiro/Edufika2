@@ -91,19 +91,19 @@ const styles = StyleSheet.create({
   },
   backendLine: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     marginBottom: 8,
   },
   sectionTitle: {
     color: "#1f2937",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 12,
     marginBottom: 8,
   },
   emptyText: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
   },
   item: {
@@ -119,14 +119,14 @@ const styles = StyleSheet.create({
   },
   itemIdx: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     minWidth: 18,
   },
   itemText: {
     flex: 1,
     color: "#4b5563",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
   },
 });

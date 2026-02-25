@@ -1,0 +1,8 @@
+## Preparation for deployment release (V1)
+1. Remove all of the debug features and configurations 
+2. Keep EDU_DEV_ACCESS for future debug or potential live error occurances
+3. Implement reverse proxy with Nginx
+4. App immediately launches with React Native UI upon start up.
+5. Prepare APK file for distribution.
+6. Rewrite hardcoated, autofill and displayed input for API backend link to API key 
+7. 

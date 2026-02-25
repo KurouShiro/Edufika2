@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
-import Layout, { TerminalBadge, TerminalButton, TerminalInput, palette, terminalStyles } from "./Layout";
+import Layout, { TerminalBadge, TerminalButton, TerminalInput, palette, useTerminalStyles } from "./Layout";
 
 type DeveloperAccessScreenProps = {
   language: AppLanguage;
@@ -46,6 +46,7 @@ export default function DeveloperAccessScreen({
   onOpenBrowserMode,
   onBack,
 }: DeveloperAccessScreenProps) {
+  const terminalStyles = useTerminalStyles();
   const [backendCheckState, setBackendCheckState] = useState<"idle" | "checking" | "ok" | "error">("idle");
   const [backendCheckMessage, setBackendCheckMessage] = useState("");
 
@@ -94,6 +95,23 @@ export default function DeveloperAccessScreen({
       if (!response.ok) {
         setBackendCheckState("error");
         setBackendCheckMessage(`HTTP ${response.status} ${response.statusText}`);
+        return;
+      }
+
+      const payload = await response.json().catch(() => ({} as Record<string, unknown>));
+      const looksLikeEdufikaApi =
+        payload &&
+        payload.ok === true &&
+        payload.service === "edufika-session-api";
+      if (!looksLikeEdufikaApi) {
+        setBackendCheckState("error");
+        setBackendCheckMessage(
+          tr(
+            language,
+            "Endpoint aktif, tapi bukan Edufika Session API (/health tidak cocok).",
+            "Endpoint is reachable, but it is not Edufika Session API (/health payload mismatch)."
+          )
+        );
         return;
       }
 

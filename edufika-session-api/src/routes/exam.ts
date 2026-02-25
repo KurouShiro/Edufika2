@@ -10,7 +10,7 @@ export function createExamRouter(service: SessionService): Router {
     try {
       const parsed = launchAccessSchema.parse({
         session_id: req.query.session_id,
-        access_signature: extractBearerToken(req) || req.query.access_signature,
+        access_signature: extractBearerToken(req),
       });
 
       const launchConfig = await service.getLaunchConfig(parsed.session_id, parsed.access_signature);
@@ -28,7 +28,7 @@ export function createExamRouter(service: SessionService): Router {
     try {
       const parsed = launchUpdateBodySchema.parse({
         ...req.body,
-        access_signature: extractBearerToken(req) || req.body?.access_signature,
+        access_signature: extractBearerToken(req),
       });
 
       const launchConfig = await service.updateLaunchUrl(

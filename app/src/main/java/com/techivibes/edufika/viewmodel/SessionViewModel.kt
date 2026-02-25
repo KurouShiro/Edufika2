@@ -5,6 +5,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.techivibes.edufika.BuildConfig
 import com.techivibes.edufika.backend.SessionClient
 import com.techivibes.edufika.data.SessionState
 import com.techivibes.edufika.data.TokenRegistry
@@ -17,9 +18,7 @@ class SessionViewModel : ViewModel() {
     private val _loginResult = MutableLiveData(UserRole.NONE)
     val loginResult: LiveData<UserRole> = _loginResult
 
-    private val _statusMessage = MutableLiveData(
-        "Debug token: StudentID | AdminID | EDU_DEV_ACCESS"
-    )
+    private val _statusMessage = MutableLiveData(loginPromptMessage())
     val statusMessage: LiveData<String> = _statusMessage
 
     fun authenticate(context: Context, rawToken: String) {
@@ -32,22 +31,28 @@ class SessionViewModel : ViewModel() {
         TokenRegistry.purgeExpired(context)
         val normalized = token.uppercase()
         when {
-            normalized == TestConstants.STUDENT_TOKEN.uppercase() ||
-                normalized == "STUDENT" -> {
+            BuildConfig.DEV_TOOLS_ENABLED && (
+                normalized == TestConstants.STUDENT_TOKEN.uppercase() ||
+                    normalized == "STUDENT"
+                ) -> {
                 SessionState.startSession(token, UserRole.STUDENT)
                 _statusMessage.value = "Login siswa berhasil."
                 _loginResult.value = UserRole.STUDENT
             }
 
-            normalized == TestConstants.ADMIN_TOKEN.uppercase() ||
-                normalized == "ADMIN" -> {
+            BuildConfig.DEV_TOOLS_ENABLED && (
+                normalized == TestConstants.ADMIN_TOKEN.uppercase() ||
+                    normalized == "ADMIN"
+                ) -> {
                 SessionState.startSession(token, UserRole.ADMIN)
                 _statusMessage.value = "Login admin/proktor berhasil."
                 _loginResult.value = UserRole.ADMIN
             }
 
-            normalized == TestConstants.DEVELOPER_ACCESS_PASSWORD.uppercase() ||
-                normalized == "DEV" -> {
+            BuildConfig.DEV_TOOLS_ENABLED && (
+                normalized == TestConstants.DEVELOPER_ACCESS_PASSWORD.uppercase() ||
+                    normalized == "DEV"
+                ) -> {
                 SessionState.startSession(token, UserRole.DEVELOPER)
                 _statusMessage.value = "Developer access granted."
                 _loginResult.value = UserRole.DEVELOPER
@@ -78,7 +83,7 @@ class SessionViewModel : ViewModel() {
                     if (response != null) {
                         val role = when (response.role.lowercase()) {
                             "admin", "proctor", "proktor" -> UserRole.ADMIN
-                            "developer" -> UserRole.DEVELOPER
+                            "developer" -> if (BuildConfig.DEV_TOOLS_ENABLED) UserRole.DEVELOPER else UserRole.ADMIN
                             else -> UserRole.STUDENT
                         }
                         val resolvedExpiry = response.tokenExpiresAtMillis ?: issuedToken?.expiresAtMillis
@@ -118,7 +123,15 @@ class SessionViewModel : ViewModel() {
     }
 
     fun resetToLoginPrompt() {
-        _statusMessage.value = "Debug token: StudentID | AdminID | EDU_DEV_ACCESS"
+        _statusMessage.value = loginPromptMessage()
         _loginResult.value = UserRole.NONE
+    }
+
+    private fun loginPromptMessage(): String {
+        return if (BuildConfig.DEV_TOOLS_ENABLED) {
+            "Debug token: StudentID | AdminID | EDU_DEV_ACCESS"
+        } else {
+            "Masukkan token sesi untuk melanjutkan."
+        }
     }
 }

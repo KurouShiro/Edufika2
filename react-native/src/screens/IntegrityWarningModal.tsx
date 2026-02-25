@@ -86,13 +86,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: 8,
     letterSpacing: 1,
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
   },
   body: {
     color: "#4b5563",
     fontSize: 11,
     lineHeight: 17,
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     marginBottom: 8,
   },
 });

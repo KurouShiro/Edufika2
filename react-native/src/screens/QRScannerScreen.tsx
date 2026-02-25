@@ -148,13 +148,13 @@ const styles = StyleSheet.create({
   },
   placeholderText: {
     color: "#d1d5db",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 11,
     textAlign: "center",
   },
   statusText: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     marginBottom: 8,
     letterSpacing: 0.8,

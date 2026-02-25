@@ -12,6 +12,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
 import com.google.android.material.button.MaterialButton
+import com.techivibes.edufika.BuildConfig
 import com.techivibes.edufika.R
 import com.techivibes.edufika.backend.SessionClient
 import com.techivibes.edufika.data.SessionLogger
@@ -31,6 +32,17 @@ class DeveloperAccessPanel : Fragment(R.layout.fragment_developer_access_panel) 
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        if (!BuildConfig.DEV_TOOLS_ENABLED) {
+            SessionLogger(requireContext()).append(
+                "DEVELOPER",
+                "Developer panel access blocked in production build."
+            )
+            SessionState.clear()
+            TestUtils.enableKiosk(requireContext(), activity = requireActivity())
+            FragmentNavigationTest.goToLoginResetStack(findNavController())
+            return
+        }
 
         val prefs = requireContext().getSharedPreferences(TestConstants.PREFS_NAME, Context.MODE_PRIVATE)
         val logger = SessionLogger(requireContext())

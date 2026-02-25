@@ -1,6 +1,7 @@
 package com.techivibes.edufika.backend
 
 import android.content.Context
+import com.techivibes.edufika.BuildConfig
 import com.techivibes.edufika.data.SessionState
 import com.techivibes.edufika.data.UserRole
 import com.techivibes.edufika.utils.TestUtils
@@ -103,12 +104,15 @@ class SessionClient(private val context: Context) {
     private var lastApiError: String? = null
 
     private val strictClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .certificatePinner(
-                CertificatePinner.Builder()
-                    .add(TestConstants.TLS_PIN_HOST, TestConstants.TLS_PIN_SHA256)
-                    .build()
-            )
+        OkHttpClient.Builder().apply {
+            if (hasConfiguredTlsPin()) {
+                certificatePinner(
+                    CertificatePinner.Builder()
+                        .add(TestConstants.TLS_PIN_HOST, TestConstants.TLS_PIN_SHA256)
+                        .build()
+                )
+            }
+        }
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(8, TimeUnit.SECONDS)
             .build()
@@ -123,8 +127,9 @@ class SessionClient(private val context: Context) {
 
     fun getServerBaseUrl(): String {
         val prefs = context.getSharedPreferences(TestConstants.PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(TestConstants.PREF_SERVER_BASE_URL, TestConstants.SERVER_BASE_URL)
+        val stored = prefs.getString(TestConstants.PREF_SERVER_BASE_URL, TestConstants.SERVER_BASE_URL)
             ?: TestConstants.SERVER_BASE_URL
+        return normalizeBaseUrl(stored)
     }
 
     fun setServerBaseUrl(rawBaseUrl: String) {
@@ -135,21 +140,37 @@ class SessionClient(private val context: Context) {
             .apply()
     }
 
-    private suspend fun postJson(path: String, body: JSONObject): JSONObject? = withContext(Dispatchers.IO) {
+    private suspend fun postJson(
+        path: String,
+        body: JSONObject,
+        bearerToken: String? = null,
+        extraHeaders: Map<String, String> = emptyMap()
+    ): JSONObject? = withContext(Dispatchers.IO) {
         val base = getServerBaseUrl().trimEnd('/')
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$base$path")
             .post(body.toString().toRequestBody(jsonMediaType))
-            .build()
+        if (!bearerToken.isNullOrBlank()) {
+            requestBuilder.header("Authorization", "Bearer $bearerToken")
+        }
+        extraHeaders.forEach { (name, value) ->
+            if (name.isNotBlank() && value.isNotBlank()) {
+                requestBuilder.header(name, value)
+            }
+        }
+        val request = requestBuilder.build()
         executeWithFallback(request)
     }
 
-    private suspend fun getJson(path: String): JSONObject? = withContext(Dispatchers.IO) {
+    private suspend fun getJson(path: String, bearerToken: String? = null): JSONObject? = withContext(Dispatchers.IO) {
         val base = getServerBaseUrl().trimEnd('/')
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$base$path")
             .get()
-            .build()
+        if (!bearerToken.isNullOrBlank()) {
+            requestBuilder.header("Authorization", "Bearer $bearerToken")
+        }
+        val request = requestBuilder.build()
         executeWithFallback(request)
     }
 
@@ -174,6 +195,9 @@ class SessionClient(private val context: Context) {
             }
         } else {
             lastApiError = strictResult.exceptionOrNull()?.message
+            if (!BuildConfig.DEV_TOOLS_ENABLED) {
+                return null
+            }
         }
 
         val fallbackResult = runCatching { fallbackClient.newCall(request).execute() }
@@ -212,7 +236,11 @@ class SessionClient(private val context: Context) {
         if (tokenCount != null) {
             body.put("token_count", tokenCount)
         }
-        val response = postJson("/session/create", body) ?: return null
+        val extraHeaders = mutableMapOf<String, String>()
+        if (TestConstants.ADMIN_CREATE_KEY.isNotBlank()) {
+            extraHeaders["x-admin-create-key"] = TestConstants.ADMIN_CREATE_KEY
+        }
+        val response = postJson("/session/create", body, extraHeaders = extraHeaders) ?: return null
         return CreateSessionResponse(
             sessionId = response.optString("session_id"),
             token = response.optString("token").ifBlank { null },
@@ -348,9 +376,8 @@ class SessionClient(private val context: Context) {
     ): LaunchConfigResponse? {
         if (sessionId.isBlank() || accessSignature.isBlank()) return null
         val encodedSession = urlEncode(sessionId)
-        val encodedSignature = urlEncode(accessSignature)
-        val path = "/exam/launch?session_id=$encodedSession&access_signature=$encodedSignature"
-        val response = getJson(path) ?: return null
+        val path = "/exam/launch?session_id=$encodedSession"
+        val response = getJson(path, bearerToken = accessSignature) ?: return null
         return LaunchConfigResponse(
             launchUrl = response.optString("launch_url").ifBlank { null },
             provider = response.optString("provider").ifBlank { null },
@@ -455,8 +482,8 @@ class SessionClient(private val context: Context) {
 
     suspend fun getProctorPinStatus(studentToken: String? = null): ProctorPinStatusResponse? {
         val encodedToken = studentToken?.trim()?.takeIf { it.isNotBlank() }?.let { "&student_token=${urlEncode(it)}" } ?: ""
-        val path = "/session/proctor-pin/status?session_id=${urlEncode(SessionState.sessionId)}&access_signature=${urlEncode(SessionState.accessSignature)}$encodedToken"
-        val response = getJson(path) ?: return null
+        val path = "/session/proctor-pin/status?session_id=${urlEncode(SessionState.sessionId)}$encodedToken"
+        val response = getJson(path, bearerToken = SessionState.accessSignature) ?: return null
         return ProctorPinStatusResponse(
             configured = response.optBoolean("configured", false),
             effectiveDate = response.optString("effective_date").ifBlank { null },
@@ -528,11 +555,15 @@ class SessionClient(private val context: Context) {
 
     private fun normalizeBaseUrl(rawValue: String): String {
         val normalized = TestUtils.normalizeUrl(rawValue).trimEnd('/')
-        return if (normalized.isBlank()) {
+        val baseUrl = if (normalized.isBlank()) {
             TestConstants.SERVER_BASE_URL
         } else {
             normalized
         }
+        if (!BuildConfig.DEV_TOOLS_ENABLED && baseUrl.startsWith("http://")) {
+            return baseUrl.replaceFirst("http://", "https://")
+        }
+        return baseUrl
     }
 
     private fun urlEncode(value: String): String {
@@ -541,6 +572,16 @@ class SessionClient(private val context: Context) {
 
     private fun parseIsoMillis(raw: String): Long? {
         return runCatching { Instant.parse(raw).toEpochMilli() }.getOrNull()
+    }
+
+    private fun hasConfiguredTlsPin(): Boolean {
+        val host = TestConstants.TLS_PIN_HOST.trim()
+        val pin = TestConstants.TLS_PIN_SHA256.trim()
+        if (host.isBlank() || !pin.startsWith("sha256/")) {
+            return false
+        }
+        val value = pin.removePrefix("sha256/")
+        return value.isNotBlank() && value != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     }
 }
 

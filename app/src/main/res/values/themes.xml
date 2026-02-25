@@ -10,25 +10,25 @@
         <item name="android:statusBarColor">@color/edufika_bg</item>
         <item name="android:navigationBarColor">@color/edufika_bg</item>
         <item name="android:windowBackground">@color/edufika_bg</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">montserrat</item>
     </style>
 
     <style name="Widget.Edufika.TextPrimary" parent="TextAppearance.MaterialComponents.Body1">
         <item name="android:textColor">@color/edufika_text</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">montserrat</item>
     </style>
 
     <style name="Widget.Edufika.Button" parent="Widget.MaterialComponents.Button">
         <item name="android:textColor">@color/edufika_bg</item>
         <item name="backgroundTint">@color/edufika_neon</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">montserrat</item>
         <item name="android:textAllCaps">false</item>
     </style>
 
     <style name="Widget.Edufika.OutlinedButton" parent="Widget.MaterialComponents.Button.OutlinedButton">
         <item name="android:textColor">@color/edufika_neon</item>
         <item name="strokeColor">@color/edufika_neon</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">montserrat</item>
         <item name="android:textAllCaps">false</item>
     </style>
 </resources>

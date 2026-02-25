@@ -54,6 +54,7 @@
                 android:text="@string/login_button" />
 
             <TextView
+                android:id="@+id/debugTokensLabel"
                 style="@style/Widget.Edufika.TextPrimary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -63,6 +64,7 @@
                 android:textSize="12sp" />
 
             <LinearLayout
+                android:id="@+id/debugButtonsRow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"

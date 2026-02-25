@@ -41,13 +41,13 @@ const styles = StyleSheet.create({
   },
   itemText: {
     color: "#4b5563",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 15,
   },
   empty: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     marginTop: 8,
   },

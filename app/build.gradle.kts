@@ -1,4 +1,5 @@
 import java.io.File
+import java.util.Properties
 import org.gradle.api.GradleException
 import org.gradle.api.tasks.Copy
 
@@ -19,13 +20,41 @@ react {
 }
 
 val ndkVersionValue = "29.0.14206865"
+val signingPropertiesFile = listOf(
+    rootProject.file("keystore.properties"),
+    rootProject.file("keystone.properties")
+).firstOrNull { it.exists() }
+val signingProperties = Properties()
+if (signingPropertiesFile != null) {
+    signingPropertiesFile.inputStream().use { signingProperties.load(it) }
+}
+val hasReleaseSigning = listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all { key ->
+    !signingProperties.getProperty(key).isNullOrBlank()
+}
+val releaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.contains("Release", ignoreCase = true)
+}
+if (releaseTaskRequested && !hasReleaseSigning) {
+    throw GradleException(
+        "Release signing is not configured. Define storeFile/storePassword/keyAlias/keyPassword " +
+            "in keystore.properties (or keystone.properties) at repo root."
+    )
+}
+
 val generatedLibcxxDir = layout.buildDirectory.dir("generated/libcxx")
-val abiToNdkTriples = mapOf(
+val abiToNdkTriplesAll = mapOf(
     "arm64-v8a" to "aarch64-linux-android",
     "armeabi-v7a" to "arm-linux-androideabi",
     "x86" to "i686-linux-android",
     "x86_64" to "x86_64-linux-android"
 )
+val configuredReactNativeArchitectures = (findProperty("reactNativeArchitectures") as String?)
+    ?.split(",")
+    ?.map { it.trim() }
+    ?.filter { it.isNotEmpty() }
+    ?.toSet()
+    ?: setOf("armeabi-v7a", "arm64-v8a")
+val abiToNdkTriples = abiToNdkTriplesAll.filterKeys { configuredReactNativeArchitectures.contains(it) }
 
 val copyNdkLibcxx by tasks.registering(Copy::class) {
     val sdkRoot = File(System.getenv("LOCALAPPDATA"), "Android/Sdk")
@@ -53,19 +82,45 @@ android {
     namespace = "com.techivibes.edufika"
     compileSdk = 36
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(signingProperties.getProperty("storeFile"))
+                storePassword = signingProperties.getProperty("storePassword")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.techivibes.edufika"
         minSdk = 29
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        ndk {
+            abiFilters += configuredReactNativeArchitectures
+        }
 
         testInstrumentationRunner = "com.techivibes.edufika.runners.CustomTestRunner"
     }
 
     buildTypes {
-        release {
+        debug {
             isMinifyEnabled = false
+            isShrinkResources = false
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+            buildConfigField("boolean", "DEV_TOOLS_ENABLED", "true")
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
+            buildConfigField("boolean", "DEV_TOOLS_ENABLED", "false")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -80,6 +135,7 @@ android {
         jvmTarget = "17"
     }
     buildFeatures {
+        buildConfig = true
         viewBinding = true
     }
     sourceSets {
@@ -96,6 +152,31 @@ android {
 
 tasks.named("preBuild").configure {
     dependsOn(copyNdkLibcxx)
+}
+
+val verifyReleaseJsBundle by tasks.registering {
+    group = "verification"
+    description = "Ensures the embedded React Native release bundle exists for non-Metro startup."
+
+    val releaseBundle = layout.buildDirectory.file("generated/assets/react/release/index.android.bundle")
+    dependsOn("createBundleReleaseJsAndAssets")
+
+    doLast {
+        val bundleFile = releaseBundle.get().asFile
+        if (!bundleFile.exists() || bundleFile.length() <= 0L) {
+            throw GradleException(
+                "Missing React Native release bundle at ${bundleFile.absolutePath}. " +
+                    "Release builds must embed index.android.bundle for offline startup."
+            )
+        }
+        logger.lifecycle(
+            "Verified embedded RN release bundle: ${bundleFile.absolutePath} (${bundleFile.length()} bytes)"
+        )
+    }
+}
+
+tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
+    dependsOn(verifyReleaseJsBundle)
 }
 
 dependencies {

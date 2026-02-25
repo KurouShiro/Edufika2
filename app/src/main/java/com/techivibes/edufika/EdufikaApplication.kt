@@ -11,12 +11,15 @@ import com.facebook.react.defaults.DefaultReactNativeHost
 import com.facebook.react.soloader.OpenSourceMergedSoMapping
 import com.facebook.soloader.SoLoader
 import com.techivibes.edufika.data.SessionStateStore
+import com.techivibes.edufika.rn.SecurityBridgePackage
 
 class EdufikaApplication : Application(), ReactApplication {
 
     override val reactNativeHost: ReactNativeHost =
         object : DefaultReactNativeHost(this) {
-            override fun getPackages() = PackageList(this).packages
+            override fun getPackages() = PackageList(this).packages.apply {
+                add(SecurityBridgePackage())
+            }
 
             override fun getJSMainModuleName(): String = "index"
 

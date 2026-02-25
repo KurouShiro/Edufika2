@@ -156,7 +156,7 @@ const styles = StyleSheet.create({
   },
   keyText: {
     color: "#4b5563",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 12,
   },
   controlsRow: {
@@ -213,7 +213,7 @@ const styles = StyleSheet.create({
   },
   controlText: {
     color: "#6b7280",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 0.6,
   },
@@ -229,7 +229,7 @@ const styles = StyleSheet.create({
   },
   clearText: {
     color: palette.warning,
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 0.7,
   },
@@ -250,7 +250,7 @@ const styles = StyleSheet.create({
   },
   copyPasteText: {
     color: "#4b5563",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 0.7,
   },

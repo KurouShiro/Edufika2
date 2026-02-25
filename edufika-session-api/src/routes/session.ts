@@ -13,13 +13,22 @@ import {
   whitelistQuerySchema,
   whitelistVerifyBodySchema,
 } from "../models/schemas";
-import { SessionService } from "../services/sessionService";
+import { extractBearerToken } from "../middleware/auth";
+import { config } from "../config";
+import { ApiError, SessionService } from "../services/sessionService";
 
 export function createSessionRouter(service: SessionService): Router {
   const router = Router();
 
   router.post("/create", async (req, res, next) => {
     try {
+      if (config.adminCreateKey) {
+        const providedCreateKey = req.get("x-admin-create-key")?.trim() || extractBearerToken(req);
+        if (!providedCreateKey || providedCreateKey !== config.adminCreateKey) {
+          throw new ApiError(401, "Unauthorized create-session request");
+        }
+      }
+
       const parsed = createSessionBodySchema.parse(req.body);
       const created = await service.createSession({
         proctorId: parsed.proctor_id,
@@ -196,7 +205,11 @@ export function createSessionRouter(service: SessionService): Router {
 
   router.get("/proctor-pin/status", async (req, res, next) => {
     try {
-      const parsed = proctorPinStatusQuerySchema.parse(req.query);
+      const parsed = proctorPinStatusQuerySchema.parse({
+        session_id: req.query.session_id,
+        student_token: req.query.student_token,
+        access_signature: extractBearerToken(req),
+      });
       const result = await service.getProctorPinStatus(
         parsed.session_id,
         parsed.access_signature,

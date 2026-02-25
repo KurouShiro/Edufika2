@@ -41,6 +41,6 @@ const styles = StyleSheet.create({
     color: "#86efac",
     fontSize: 9,
     lineHeight: 13,
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
   },
 });

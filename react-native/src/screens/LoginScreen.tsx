@@ -89,7 +89,7 @@ const styles = StyleSheet.create({
   tokenText: {
     flex: 1,
     color: "#16a34a",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 18,
     letterSpacing: 1.2,
   },
@@ -101,7 +101,7 @@ const styles = StyleSheet.create({
   },
   statusText: {
     color: palette.muted,
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     marginBottom: 8,
     minHeight: 20,
@@ -125,7 +125,7 @@ const styles = StyleSheet.create({
   },
   iconText: {
     color: "#6b7280",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 1,
   },

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { extractBearerToken } from "../middleware/auth";
 import { SessionService } from "../services/sessionService";
 
 const revokeSchema = z.object({
@@ -106,7 +107,10 @@ export function createAdminRouter(service: SessionService): Router {
 
   router.get("/monitor", async (req, res, next) => {
     try {
-      const parsed = monitorQuerySchema.parse(req.query);
+      const parsed = monitorQuerySchema.parse({
+        session_id: req.query.session_id,
+        access_signature: extractBearerToken(req),
+      });
       const result = await service.getSessionMonitor(parsed.session_id, parsed.access_signature);
       res.json({
         session_id: result.sessionId,

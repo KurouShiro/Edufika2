@@ -70,7 +70,7 @@ const styles = StyleSheet.create({
   },
   alertIconText: {
     color: palette.warning,
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 40,
     marginTop: -2,
   },
@@ -84,20 +84,20 @@ const styles = StyleSheet.create({
   },
   logTitle: {
     color: palette.warning,
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 0.9,
     marginBottom: 6,
   },
   logLine: {
     color: "#ef4444",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 16,
   },
   helpText: {
     color: "#6b7280",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     marginBottom: 10,
     lineHeight: 16,

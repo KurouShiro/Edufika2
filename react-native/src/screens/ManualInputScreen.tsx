@@ -67,7 +67,7 @@ const styles = StyleSheet.create({
   },
   noteText: {
     color: "#4b5563",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 14,
   },

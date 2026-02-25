@@ -320,7 +320,7 @@ const styles = StyleSheet.create({
   },
   tabText: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 0.8,
   },
@@ -349,13 +349,13 @@ const styles = StyleSheet.create({
   },
   metricLabel: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 10,
     marginBottom: 4,
   },
   metricValue: {
     color: "#1f2937",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 24,
   },
   metricValueWarning: {
@@ -371,31 +371,31 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     color: "#1f2937",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 12,
     marginBottom: 8,
   },
   infoLine: {
     color: "#6b7280",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     marginBottom: 4,
   },
   backendLine: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     marginBottom: 8,
   },
   pinValue: {
     color: "#22c55e",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 22,
     marginBottom: 6,
   },
   pinStatus: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 15,
   },
@@ -409,13 +409,13 @@ const styles = StyleSheet.create({
   },
   logText: {
     color: "#4b5563",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 15,
   },
   emptyText: {
     color: "#9ca3af",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
   },
   tokenRow: {
@@ -434,12 +434,12 @@ const styles = StyleSheet.create({
   },
   tokenValue: {
     color: "#111827",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 11,
   },
   tokenMeta: {
     color: "#6b7280",
-    fontFamily: "JetBrainsMono-Regular",
+    fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 15,
   },
@@ -465,7 +465,7 @@ const styles = StyleSheet.create({
   },
   statusText: {
     color: "#111827",
-    fontFamily: "JetBrainsMono-Bold",
+    fontFamily: "Montserrat-Bold",
     fontSize: 9,
     letterSpacing: 0.5,
   },

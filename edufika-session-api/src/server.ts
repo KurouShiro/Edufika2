@@ -17,7 +17,7 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(httpsOnlyMiddleware);
 
-const wsHub = new WsHub();
+const wsHub = new WsHub({ authToken: config.wsAuthToken });
 const sessionService = new SessionService(wsHub);
 
 app.get("/health", (_req, res) => {
@@ -50,6 +50,9 @@ const stopWatcher = startHeartbeatTimeoutWatcher(sessionService, wsHub);
 
 server.listen(config.port, config.host, () => {
   console.log(`Edufika Session API listening on ${config.host}:${config.port}`);
+  if (config.wsAuthToken) {
+    console.log("Realtime WS auth is enabled.");
+  }
   const lanIps = getLanIpv4Addresses();
   if (lanIps.length > 0) {
     console.log("Phone test URLs:");
