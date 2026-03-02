@@ -264,12 +264,8 @@ class ExamScreen : Fragment(R.layout.fragment_exam_screen) {
                 true -> onAllowed()
                 false -> onDenied()
                 null -> {
-                    val backendOnline = client.pingHealth()
-                    if (backendOnline) {
-                        onDenied()
-                    } else {
-                        onUnavailable()
-                    }
+                    // Fail-open for transient verifier failures to avoid false-positive locks.
+                    onUnavailable()
                 }
             }
         }

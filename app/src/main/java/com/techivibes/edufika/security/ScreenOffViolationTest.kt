@@ -15,7 +15,7 @@ class ScreenOffViolationTest(
     private var registered = false
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_SCREEN_OFF && SessionState.isStudentSessionActive()) {
+            if (intent?.action == Intent.ACTION_SCREEN_OFF && SessionState.isStudentExamSessionActive()) {
                 onViolation()
             }
         }

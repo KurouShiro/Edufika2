@@ -26,6 +26,7 @@ object SessionStateStore {
             .put("last_heartbeat_ms", SessionState.lastHeartbeatMillis)
             .put("expiry_ms", SessionState.expiryTimestampMillis())
             .put("current_exam_url", SessionState.currentExamUrl)
+            .put("exam_mode_active", SessionState.examModeActive)
             .put("heartbeat_seq", SessionState.heartbeatSequence)
 
         prefs(context).edit()
@@ -65,7 +66,8 @@ object SessionStateStore {
             lastSignatureRotation = node.optLong("last_signature_rotation_ms", 0L),
             lastHeartbeat = node.optLong("last_heartbeat_ms", 0L),
             examUrl = node.optString("current_exam_url").trim(),
-            heartbeatSeq = node.optLong("heartbeat_seq", 0L)
+            heartbeatSeq = node.optLong("heartbeat_seq", 0L),
+            examMode = node.optBoolean("exam_mode_active", false)
         )
         return true
     }

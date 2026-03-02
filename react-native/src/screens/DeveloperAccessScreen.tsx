@@ -11,10 +11,17 @@ type DeveloperAccessScreenProps = {
   onPasswordChange: (value: string) => void;
   unlocked: boolean;
   kioskEnabled: boolean;
+  violationSystemEnabled: boolean;
+  splitScreenDetectionEnabled: boolean;
   onUnlock: () => void;
   onToggleKiosk: (value: boolean) => void;
+  onToggleViolationSystem: (value: boolean) => void;
+  onToggleSplitScreenDetection: (value: boolean) => void;
   browserUrl: string;
   onBrowserUrlChange: (value: string) => void;
+  developerClaimTokenInput: string;
+  onDeveloperClaimTokenInputChange: (value: string) => void;
+  onDeveloperClaimToken: () => void;
   adminToken: string;
   adminTokenExpiryAt: string;
   adminTokenExpiryMinutes: string;
@@ -33,10 +40,17 @@ export default function DeveloperAccessScreen({
   onPasswordChange,
   unlocked,
   kioskEnabled,
+  violationSystemEnabled,
+  splitScreenDetectionEnabled,
   onUnlock,
   onToggleKiosk,
+  onToggleViolationSystem,
+  onToggleSplitScreenDetection,
   browserUrl,
   onBrowserUrlChange,
+  developerClaimTokenInput,
+  onDeveloperClaimTokenInputChange,
+  onDeveloperClaimToken,
   adminToken,
   adminTokenExpiryAt,
   adminTokenExpiryMinutes,
@@ -181,6 +195,34 @@ export default function DeveloperAccessScreen({
               thumbColor={kioskEnabled ? palette.neon : "#94a3b8"}
             />
           </View>
+          <View style={terminalStyles.row}>
+            <Text style={terminalStyles.bodyText}>
+              {violationSystemEnabled
+                ? tr(language, "Violation System Aktif", "Violation System Active")
+                : tr(language, "Violation System Nonaktif", "Violation System Disabled")}
+            </Text>
+            <Switch
+              value={violationSystemEnabled}
+              onValueChange={onToggleViolationSystem}
+              disabled={!unlocked}
+              trackColor={{ false: "#d1d5db", true: "rgba(34,197,94,0.35)" }}
+              thumbColor={violationSystemEnabled ? palette.neon : "#94a3b8"}
+            />
+          </View>
+          <View style={terminalStyles.row}>
+            <Text style={terminalStyles.bodyText}>
+              {splitScreenDetectionEnabled
+                ? tr(language, "Split-screen Detection Aktif", "Split-screen Detection Active")
+                : tr(language, "Split-screen Detection Nonaktif", "Split-screen Detection Disabled")}
+            </Text>
+            <Switch
+              value={splitScreenDetectionEnabled}
+              onValueChange={onToggleSplitScreenDetection}
+              disabled={!unlocked}
+              trackColor={{ false: "#d1d5db", true: "rgba(34,197,94,0.35)" }}
+              thumbColor={splitScreenDetectionEnabled ? palette.neon : "#94a3b8"}
+            />
+          </View>
         </View>
 
         <TerminalInput
@@ -197,6 +239,24 @@ export default function DeveloperAccessScreen({
           disabled={!unlocked}
           onPress={onOpenBrowserMode}
         />
+
+        <View style={terminalStyles.card}>
+          <Text style={terminalStyles.subtleText}>{tr(language, "Developer Token Claim", "Developer Token Claim")}</Text>
+          <TerminalInput
+            value={developerClaimTokenInput}
+            onChangeText={onDeveloperClaimTokenInputChange}
+            label={tr(language, "Token To Claim", "Token To Claim")}
+            placeholder="S-XXXXXXXX / A-XXXXXXXX"
+            autoCapitalize="characters"
+            editable={unlocked}
+          />
+          <TerminalButton
+            label={tr(language, "Claim Token (Developer)", "Claim Token (Developer)")}
+            variant="outline"
+            disabled={!unlocked}
+            onPress={onDeveloperClaimToken}
+          />
+        </View>
 
         <View style={terminalStyles.card}>
           <Text style={terminalStyles.subtleText}>{tr(language, "Identity Minting", "Identity Minting")}</Text>

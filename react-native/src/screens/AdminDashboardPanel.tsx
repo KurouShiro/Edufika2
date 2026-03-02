@@ -1,13 +1,20 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
 import Layout, { TerminalButton, TerminalInput, palette } from "./Layout";
+
+export type AdminGeneratedTokenItem = {
+  token: string;
+  expiresAt: string;
+};
 
 type AdminDashboardPanelProps = {
   language: AppLanguage;
   backendBaseUrl: string;
   generatedToken: string;
   generatedTokenExpiryAt: string;
+  tokenBatchCount: string;
+  generatedTokenBatch: AdminGeneratedTokenItem[];
   tokenExpiryMinutes: string;
   tokenLaunchUrl: string;
   tokenLaunchUrlStatus: string;
@@ -16,24 +23,32 @@ type AdminDashboardPanelProps = {
   revokeTokenInput: string;
   revokeTokenStatus: string;
   sessionControlStatus: string;
+  backendMonitorError: string;
   tokenMonitorItems: AdminTokenMonitorItem[];
   logs: string[];
+  onTokenBatchCountChange: (value: string) => void;
   onTokenExpiryMinutesChange: (value: string) => void;
   onTokenLaunchUrlChange: (value: string) => void;
   onSaveTokenLaunchUrl: () => void;
+  onSaveTokenLaunchUrlForAll: () => void;
   onProctorPinChange: (value: string) => void;
   onSaveProctorPin: () => void;
+  onSaveProctorPinForAll: () => void;
   onRevokeTokenInputChange: (value: string) => void;
   onRevokeStudentToken: () => void;
   onPauseSession: () => void;
   onResumeSession: () => void;
   onReissueSignature: () => void;
+  onStopSession: () => void;
   onGenerateToken: () => void;
-  onCopyGeneratedToken: () => void;
+  onCopyGeneratedToken: (token?: string) => void;
+  onCopyAllGeneratedTokens: () => void;
+  onSelectGeneratedToken: (token: string) => void;
   onOpenWhitelist: () => void;
   onOpenHistory: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
+  onTabChange?: (tab: "monitor" | "tokens" | "logs") => void;
 };
 
 type MonitorStatus = "issued" | "online" | "offline" | "revoked" | "expired";
@@ -55,6 +70,8 @@ export default function AdminDashboardPanel({
   backendBaseUrl,
   generatedToken,
   generatedTokenExpiryAt,
+  tokenBatchCount,
+  generatedTokenBatch,
   tokenExpiryMinutes,
   tokenLaunchUrl,
   tokenLaunchUrlStatus,
@@ -63,28 +80,40 @@ export default function AdminDashboardPanel({
   revokeTokenInput,
   revokeTokenStatus,
   sessionControlStatus,
+  backendMonitorError,
   tokenMonitorItems,
   logs,
+  onTokenBatchCountChange,
   onTokenExpiryMinutesChange,
   onTokenLaunchUrlChange,
   onSaveTokenLaunchUrl,
+  onSaveTokenLaunchUrlForAll,
   onProctorPinChange,
   onSaveProctorPin,
+  onSaveProctorPinForAll,
   onRevokeTokenInputChange,
   onRevokeStudentToken,
   onPauseSession,
   onResumeSession,
   onReissueSignature,
+  onStopSession,
   onGenerateToken,
   onCopyGeneratedToken,
+  onCopyAllGeneratedTokens,
+  onSelectGeneratedToken,
   onOpenWhitelist,
   onOpenHistory,
   onOpenSettings,
   onLogout,
+  onTabChange,
 }: AdminDashboardPanelProps) {
   const [tab, setTab] = useState<AdminTab>("monitor");
   const activeCount = useMemo(() => Math.max(1, Math.min(99, logs.length)), [logs.length]);
   const alertCount = useMemo(() => logs.filter((entry) => entry.toLowerCase().includes("risk") || entry.toLowerCase().includes("violation")).length, [logs]);
+
+  useEffect(() => {
+    onTabChange?.(tab);
+  }, [onTabChange, tab]);
 
   return (
     <Layout
@@ -135,6 +164,11 @@ export default function AdminDashboardPanel({
                 variant="outline"
                 onPress={onReissueSignature}
               />
+              <TerminalButton
+                label={tr(language, "Stop Session", "Stop Session")}
+                variant="outline"
+                onPress={onStopSession}
+              />
               <Text style={styles.infoLine}>{sessionControlStatus}</Text>
             </View>
             <View style={styles.card}>
@@ -144,6 +178,11 @@ export default function AdminDashboardPanel({
             </View>
             <View style={styles.card}>
               <Text style={styles.cardTitle}>{tr(language, "Status Token Tergenerate", "Generated Token Status")}</Text>
+              {backendMonitorError ? (
+                <Text style={styles.monitorErrorText}>
+                  {tr(language, "Monitor backend error", "Monitor backend error")}: {backendMonitorError}
+                </Text>
+              ) : null}
               {tokenMonitorItems.length === 0 ? (
                 <Text style={styles.emptyText}>{tr(language, "Belum ada token.", "No generated tokens yet.")}</Text>
               ) : (
@@ -177,21 +216,67 @@ export default function AdminDashboardPanel({
             <View style={styles.card}>
               <Text style={styles.cardTitle}>{tr(language, "Generate Session Token", "Generate Session Token")}</Text>
               <TerminalInput
+                value={tokenBatchCount}
+                onChangeText={onTokenBatchCountChange}
+                label={tr(language, "Jumlah Token", "Token Count")}
+                placeholder="1-300"
+                keyboardType="number-pad"
+              />
+              <TerminalInput
                 value={tokenExpiryMinutes}
                 onChangeText={onTokenExpiryMinutesChange}
                 label={tr(language, "Durasi Token (Menit)", "Token Duration (Minutes)")}
                 placeholder="120"
                 keyboardType="number-pad"
               />
-              <TerminalButton label={tr(language, "Generate Token Siswa", "Generate Student Token")} onPress={onGenerateToken} />
+              <TerminalButton
+                label={tr(language, "Generate Token Siswa (Batch)", "Generate Student Tokens (Batch)")}
+                onPress={onGenerateToken}
+              />
               <TerminalButton
                 label={tr(language, "Copy Token", "Copy Token")}
                 variant="outline"
-                onPress={onCopyGeneratedToken}
+                onPress={() => onCopyGeneratedToken()}
                 disabled={!generatedToken}
+              />
+              <TerminalButton
+                label={tr(language, "Copy Semua Token", "Copy All Tokens")}
+                variant="outline"
+                onPress={onCopyAllGeneratedTokens}
+                disabled={generatedTokenBatch.length === 0}
               />
               <Text style={styles.infoLine}>{tr(language, "Token:", "Token:")} {generatedToken || "-"}</Text>
               <Text style={styles.infoLine}>{tr(language, "Kadaluarsa:", "Expires:")} {generatedTokenExpiryAt || "-"}</Text>
+              <Text style={styles.batchTitle}>
+                {tr(language, "Daftar Token Batch", "Batch Token List")} ({generatedTokenBatch.length})
+              </Text>
+              {generatedTokenBatch.length === 0 ? (
+                <Text style={styles.emptyText}>{tr(language, "Belum ada token batch.", "No batch tokens yet.")}</Text>
+              ) : (
+                <View style={styles.batchListWrap}>
+                  {generatedTokenBatch.map((entry) => {
+                    const isActive = entry.token.trim().toUpperCase() === generatedToken.trim().toUpperCase();
+                    return (
+                    <View key={entry.token} style={[styles.batchRow, isActive ? styles.batchRowActive : null]}>
+                      <Pressable style={styles.batchInfo} onPress={() => onSelectGeneratedToken(entry.token)}>
+                        <Text style={styles.batchToken}>{entry.token}</Text>
+                        <Text style={styles.batchMeta}>
+                          {tr(language, "Kadaluarsa", "Expires")}: {entry.expiresAt}
+                        </Text>
+                        <Text style={[styles.batchSelectHint, isActive ? styles.batchSelectHintActive : null]}>
+                          {isActive
+                            ? tr(language, "Token aktif untuk URL/PIN", "Active token for URL/PIN")
+                            : tr(language, "Tap untuk jadikan aktif", "Tap to set active")}
+                        </Text>
+                      </Pressable>
+                      <Pressable style={styles.batchCopyBtn} onPress={() => onCopyGeneratedToken(entry.token)}>
+                        <Text style={styles.batchCopyText}>{tr(language, "Copy", "Copy")}</Text>
+                      </Pressable>
+                    </View>
+                    );
+                  })}
+                </View>
+              )}
             </View>
 
             <View style={styles.card}>
@@ -208,6 +293,12 @@ export default function AdminDashboardPanel({
                 variant="outline"
                 onPress={onSaveTokenLaunchUrl}
               />
+              <TerminalButton
+                label={tr(language, "Simpan URL ke Semua Token Batch", "Save URL to All Batch Tokens")}
+                variant="outline"
+                onPress={onSaveTokenLaunchUrlForAll}
+                disabled={generatedTokenBatch.length === 0}
+              />
               <Text style={styles.infoLine}>{tokenLaunchUrlStatus}</Text>
             </View>
 
@@ -222,6 +313,12 @@ export default function AdminDashboardPanel({
                 secureTextEntry
               />
               <TerminalButton label={tr(language, "Simpan PIN", "Save PIN")} variant="outline" onPress={onSaveProctorPin} />
+              <TerminalButton
+                label={tr(language, "Simpan PIN ke Semua Token Batch", "Save PIN to All Batch Tokens")}
+                variant="outline"
+                onPress={onSaveProctorPinForAll}
+                disabled={generatedTokenBatch.length === 0}
+              />
               <Text style={styles.pinStatus}>{proctorPinStatus}</Text>
             </View>
 
@@ -443,6 +540,69 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 15,
   },
+  batchTitle: {
+    color: "#111827",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 11,
+    marginTop: 8,
+    marginBottom: 6,
+  },
+  batchListWrap: {
+    gap: 6,
+  },
+  batchRow: {
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 12,
+    backgroundColor: "#f8fafc",
+    padding: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+  },
+  batchRowActive: {
+    borderColor: "rgba(34,197,94,0.5)",
+    backgroundColor: "rgba(34,197,94,0.09)",
+  },
+  batchInfo: {
+    flex: 1,
+  },
+  batchToken: {
+    color: "#111827",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 11,
+    marginBottom: 2,
+  },
+  batchMeta: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-Regular",
+    fontSize: 9,
+  },
+  batchSelectHint: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-Regular",
+    fontSize: 9,
+    marginTop: 2,
+  },
+  batchSelectHintActive: {
+    color: "#166534",
+    fontFamily: "Montserrat-Bold",
+  },
+  batchCopyBtn: {
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: "#ffffff",
+  },
+  batchCopyText: {
+    color: "#166534",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 9,
+    letterSpacing: 0.3,
+  },
   statusBadge: {
     borderWidth: 1,
     borderColor: "#9ca3af",
@@ -468,6 +628,12 @@ const styles = StyleSheet.create({
     fontFamily: "Montserrat-Bold",
     fontSize: 9,
     letterSpacing: 0.5,
+  },
+  monitorErrorText: {
+    color: "#b91c1c",
+    fontFamily: "Montserrat-SemiBold",
+    fontSize: 11,
+    marginBottom: 8,
   },
   footerWrap: {
     gap: 0,

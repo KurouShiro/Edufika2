@@ -117,9 +117,6 @@ CREATE TABLE IF NOT EXISTS session_cleanup_audit (
     archive_payload JSON NOT NULL
 );
 
-CREATE UNIQUE INDEX uq_session_tokens_exam_session_role
-ON session_tokens (exam_session_id, role);
-
 CREATE INDEX idx_session_tokens_exam_session_id
 ON session_tokens (exam_session_id);
 

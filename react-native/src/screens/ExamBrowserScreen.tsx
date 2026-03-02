@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import type { WebViewNavigation } from "react-native-webview/lib/WebViewTypes";
@@ -23,6 +23,7 @@ type ExamBrowserScreenProps = {
   whitelist: string[];
   bypassWhitelist: boolean;
   onPinAttemptChange: (value: string) => void;
+  onProctorPinModalVisibleChange?: (visible: boolean) => void;
   onSubmitPinExit: () => void;
   onDismissIntegrityWarning: () => void;
   onBlockedNavigation: (url: string) => void;
@@ -146,6 +147,7 @@ export default function ExamBrowserScreen({
   whitelist,
   bypassWhitelist,
   onPinAttemptChange,
+  onProctorPinModalVisibleChange,
   onSubmitPinExit,
   onDismissIntegrityWarning,
   onBlockedNavigation,
@@ -154,6 +156,10 @@ export default function ExamBrowserScreen({
   const [blockedMessage, setBlockedMessage] = useState("");
   const [webError, setWebError] = useState("");
   const [showExitModal, setShowExitModal] = useState(false);
+
+  useEffect(() => {
+    onProctorPinModalVisibleChange?.(showExitModal);
+  }, [onProctorPinModalVisibleChange, showExitModal]);
 
   const allowedHosts = useMemo(() => {
     const normalized = normalizeAllowlist(whitelist);

@@ -38,6 +38,7 @@ class HeartbeatService : Service() {
     private var reportedRootRisk = false
     private var powerWarningReported = false
     private var consecutiveFailures = 0
+    private var offlineGraceAnnounced = false
 
     override fun onCreate() {
         super.onCreate()
@@ -63,6 +64,11 @@ class HeartbeatService : Service() {
     private suspend fun heartbeatLoop() {
         while (serviceScope.isActive) {
             if (!SessionState.isStudentSessionActive()) {
+                delay(TestConstants.HEARTBEAT_INTERVAL_MILLIS)
+                continue
+            }
+            if (!isViolationSystemEnabled()) {
+                sendStatus("monitoring_disabled_by_developer", "DISABLED")
                 delay(TestConstants.HEARTBEAT_INTERVAL_MILLIS)
                 continue
             }
@@ -104,6 +110,7 @@ class HeartbeatService : Service() {
             val response = sessionClient.sendHeartbeat(payload)
             if (response != null) {
                 consecutiveFailures = 0
+                offlineGraceAnnounced = false
                 SessionState.markHeartbeatNow()
                 response.rotateSignature?.let { SessionState.rotateAccessSignature(it) }
                 if (response.whitelist.isNotEmpty()) {
@@ -124,7 +131,7 @@ class HeartbeatService : Service() {
                     tryReconnect("SERVER_SUSPENDED")
                 } else if (response.sessionState == "PAUSED") {
                     sendStatus("session paused by proctor", response.sessionState)
-                } else if (SessionState.riskLocked()) {
+                } else if (SessionState.isStudentExamSessionActive() && SessionState.riskLocked()) {
                     sendLock("HeartbeatService: local risk threshold reached.")
                 }
             } else {
@@ -138,18 +145,40 @@ class HeartbeatService : Service() {
                 )
 
                 val staleMillis = System.currentTimeMillis() - SessionState.lastHeartbeatMillis
+                val examActive = SessionState.isStudentExamSessionActive()
+                val suspiciousWhileOffline =
+                    !FocusMonitorState.hasWindowFocus ||
+                        FocusMonitorState.isMultiWindow
                 when {
+                    staleMillis >= HEARTBEAT_HARD_LOCK_MILLIS -> {
+                        if (examActive) {
+                            sendLock("HeartbeatService: koneksi terputus melebihi offline grace window, sesi dikunci.")
+                        } else {
+                            sendStatus("heartbeat_failed: offline_grace_active", "OFFLINE_GRACE")
+                        }
+                    }
                     staleMillis >= TestConstants.HEARTBEAT_LOCK_MILLIS -> {
-                        sendLock("HeartbeatService: koneksi terputus terlalu lama, sesi dikunci.")
+                        if (examActive && suspiciousWhileOffline) {
+                            sendLock("HeartbeatService: offline + sinyal risiko terdeteksi, sesi dikunci.")
+                        } else {
+                            if (!offlineGraceAnnounced) {
+                                sendStatus("heartbeat_failed: offline_grace_active", "OFFLINE_GRACE")
+                                offlineGraceAnnounced = true
+                            }
+                            tryReconnect("OFFLINE_GRACE")
+                        }
                     }
                     staleMillis >= TestConstants.HEARTBEAT_SUSPEND_MILLIS -> {
+                        offlineGraceAnnounced = false
                         sendStatus("heartbeat_failed: suspended_window", "SUSPENDED")
                         tryReconnect("SUSPEND_WINDOW")
                     }
                     staleMillis >= TestConstants.HEARTBEAT_TIMEOUT_MILLIS -> {
+                        offlineGraceAnnounced = false
                         sendStatus("heartbeat_failed: degraded_window", "DEGRADED")
                     }
                     else -> {
+                        offlineGraceAnnounced = false
                         sendStatus("heartbeat_failed", "ACTIVE")
                     }
                 }
@@ -166,6 +195,7 @@ class HeartbeatService : Service() {
     private suspend fun tryReconnect(reason: String) {
         val reconnect = sessionClient.reconnectSession(reason) ?: return
         if (!reconnect.accepted || reconnect.accessSignature.isNullOrBlank()) return
+        offlineGraceAnnounced = false
         SessionState.rotateAccessSignature(reconnect.accessSignature)
         SessionState.markHeartbeatNow()
         if (reconnect.whitelist.isNotEmpty()) {
@@ -290,7 +320,16 @@ class HeartbeatService : Service() {
         sendBroadcast(intent)
     }
 
+    private fun isViolationSystemEnabled(): Boolean {
+        return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE).getBoolean(
+            TestConstants.PREF_VIOLATION_SYSTEM_ENABLED,
+            true
+        )
+    }
+
     companion object {
+        private const val HEARTBEAT_HARD_LOCK_MILLIS = 20 * 60 * 1000L
+
         fun start(context: android.content.Context) {
             context.startService(Intent(context, HeartbeatService::class.java))
         }

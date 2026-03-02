@@ -28,39 +28,23 @@ scp -r ./edufika-session-api user@edufika.techivibes.com:/home/user/
 
 ## Step 2: Configure Environment Variables
 
-The `.env` file needs to be updated for production. Create or edit `.env` on your VPS:
+The `.env` file has already been configured with production settings. Update it with your secrets.
+
+**Required .env configuration:**
 
 ```
-bash
-# Navigate to the project directory
-cd edufika-session-api
-
-# Create production .env file
-cp .env.example .env
-```
-
-Edit `.env` with these production values:
-
-```
-env
 HOST=0.0.0.0
 PORT=8091
 NODE_ENV=production
 DB_DIALECT=mysql
 
-# IMPORTANT: Update this to connect to your VPS MariaDB
-# If using Docker MariaDB: mysql://edufika:edufika@mariadb:3306/edufika
-# If using host MariaDB:   mysql://edufika:edufika@localhost:3306/edufika
-DATABASE_URL=mysql://edufika:edufika@localhost:3306/edufika
+# For Docker Compose (connects to mariadb container):
+DATABASE_URL=mysql://edufika:edufika@mariadb:3306/edufika
 
-# Generate secure secrets for production:
+# Security settings - UPDATE THESE WITH SECURE VALUES:
 JWT_SECRET=<generate-a-strong-random-secret>
 WS_AUTH_TOKEN=<generate-a-strong-random-token>
 ADMIN_CREATE_KEY=<generate-a-strong-random-key>
-
-# Security settings
-REQUIRE_HTTPS=true
-DEFAULT_WHITELIST=https://edufika.techivibes.com
 
 # Token settings
 DEFAULT_TOKEN_TTL_MINUTES=120
@@ -70,12 +54,16 @@ ACCESS_SIGNATURE_TTL_SECONDS=300
 HEARTBEAT_TIMEOUT_SECONDS=30
 HEARTBEAT_WATCH_INTERVAL_SECONDS=5
 RISK_LOCK_THRESHOLD=12
+
+# Security
+REQUIRE_HTTPS=true
+DEFAULT_WHITELIST=https://edufika.techivibes.com,https://example.org
 ```
 
 **Generate secure secrets:**
 ```
 bash
-# Generate random secrets (run on VPS)
+# Run on your local machine or VPS
 openssl rand -hex 64  # For JWT_SECRET
 openssl rand -hex 64  # For WS_AUTH_TOKEN  
 openssl rand -hex 64  # For ADMIN_CREATE_KEY
@@ -83,97 +71,35 @@ openssl rand -hex 64  # For ADMIN_CREATE_KEY
 
 ---
 
-## Step 3: Choose Database Setup
+## Step 3: Start All Services
 
-### Option A: Use Existing VPS MariaDB (Recommended)
-Since you already have MariaDB running on your VPS, update `.env`:
-```
-env
-DATABASE_URL=mysql://edufika:edufika@host.docker.internal:3306/edufika
-```
+The docker-compose.yml includes MariaDB, phpMyAdmin, and the API application.
 
-Note: On Linux, you may need to use the host's internal IP instead of `host.docker.internal`:
-```
-env
-DATABASE_URL=mysql://edufika:edufika@172.17.0.1:3306/edufika
-```
-
-### Option B: Use Docker MariaDB
-Use the provided `docker-compose.yml` which includes MariaDB:
 ```
 bash
-docker compose up -d mariadb
+# Navigate to the project directory
+cd edufika-session-api
+
+# Build and start all containers
+docker compose up -d --build
+
+# View logs
+docker compose logs -f
 ```
+
+**Services started:**
+- MariaDB: `localhost:3307` (container port 3306 exposed as 3307)
+- phpMyAdmin: `http://localhost:8089` (user: root, password: rootpass)
+- API: `http://localhost:8091`
 
 ---
 
-## Step 4: Build and Run with Docker
+## Step 4: Verify Deployment
 
-### Build the Docker image:
-```
-bash
-docker build -t edufika-session-api .
-```
-
-### Run the container:
-```
-bash
-# Run in background
-docker run -d \
-  --name edufika-session-api \
-  -p 8091:8091 \
-  --env-file .env \
-  edufika-session-api
-```
-
-### Or use docker-compose (recommended):
-```
-bash
-# For using Docker's internal MariaDB
-docker compose up -d
-
-# For connecting to host MariaDB, create docker-compose.override.yml:
-cat > docker-compose.override.yml << 'EOF'
-services:
-  app:
-    build: .
-    ports:
-      - "8091:8091"
-    environment:
-      - NODE_ENV=production
-    env_file:
-      - .env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-EOF
-
-docker compose up -d app
-```
-
----
-
-## Step 5: Run Database Migrations
-
-The Dockerfile already runs migrations automatically (`node dist/db/runMigrations.js`). 
-
-If you need to run them manually:
-```
-bash
-docker exec -it edufika-session-api npm run migrate
-```
-
----
-
-## Step 6: Verify Deployment
-
-Check if the API is running:
 ```
 bash
 # Check container status
-docker ps
-
-# Check logs
-docker logs edufika-session-api
+docker compose ps
 
 # Test health endpoint
 curl http://localhost:8091/health
@@ -185,11 +111,13 @@ json
 {"ok":true,"service":"edufika-session-api","now":"2024-..."}
 ```
 
+**Database migrations** run automatically when the container starts.
+
 ---
 
-## Step 7: Configure Nginx Reverse Proxy (Recommended)
+## Step 5: Configure Nginx Reverse Proxy
 
-For HTTPS and domain access, set up Nginx:
+For domain access and SSL:
 
 ```
 bash
@@ -201,8 +129,7 @@ sudo nano /etc/nginx/sites-available/edufika
 ```
 
 Add this configuration:
-```
-nginx
+```nginx
 server {
     listen 80;
     server_name edufika.techivibes.com;
@@ -231,7 +158,7 @@ sudo systemctl restart nginx
 
 ---
 
-## Step 8: Set Up SSL with Let's Encrypt (Recommended)
+## Step 6: Set Up SSL with Let's Encrypt
 
 ```
 bash
@@ -240,13 +167,11 @@ sudo apt install certbot python3-certbot-nginx
 
 # Get SSL certificate
 sudo certbot --nginx -d edufika.techivibes.com
-
-# Follow the prompts
 ```
 
 ---
 
-## Step 9: Firewall Configuration
+## Step 7: Firewall Configuration
 
 ```
 bash
@@ -254,31 +179,28 @@ bash
 sudo ufw allow 22    # SSH
 sudo ufw allow 80    # HTTP
 sudo ufw allow 443   # HTTPS
-sudo ufw allow 8091  # API (if not behind Nginx)
 sudo ufw enable
 ```
 
 ---
 
-## Quick Commands Reference
+## Quick Commands
 
 ```
 bash
-# Start API
-docker start edufika-session-api
-
-# Stop API
-docker stop edufika-session-api
-
-# View logs
-docker logs -f edufika-session-api
-
-# Restart after updates
-docker compose down
-docker compose build
+# Start services
 docker compose up -d
 
-# Update and redeploy
+# Stop services
+docker compose down
+
+# View logs
+docker compose logs -f app
+
+# Rebuild and restart
+docker compose up -d --build
+
+# Restart after git pull
 git pull
 docker compose down
 docker compose build --no-cache
@@ -289,42 +211,33 @@ docker compose up -d
 
 ## Production Checklist
 
-- [ ] Environment variables set (JWT_SECRET, WS_AUTH_TOKEN, ADMIN_CREATE_KEY)
+- [ ] Environment variables updated with secure secrets
 - [ ] Database migrations run successfully
-- [ ] HTTPS enabled (REQUIRE_HTTPS=true)
-- [ ] Firewall configured
-- [ ] SSL certificate installed (Let's Encrypt)
+- [ ] Health endpoint tested: `curl http://localhost:8091/health`
 - [ ] Nginx reverse proxy configured
-- [ ] Health endpoint tested: `curl https://edufika.techivibes.com/health`
-- [ ] Logs monitored for errors
-- [ ] Backup strategy for database established
+- [ ] SSL certificate installed (Let's Encrypt)
+- [ ] Firewall configured
+- [ ] Domain pointing to VPS IP
 
 ---
 
 ## Troubleshooting
 
-### Database Connection Issues
+**Database Connection Issues:**
 ```
 bash
-# Check if MariaDB is running
-sudo systemctl status mariadb
+# Check MariaDB logs
+docker compose logs mariadb
 
-# Test connection
-mysql -u edufika -p -h localhost edufika
+# Test connection from app container
+docker compose exec app sh -c 'nc -zv mariadb 3306'
 ```
 
-### Container Issues
-```
-bash
-# View detailed logs
-docker logs edufika-session-api
-
-# Check environment variables inside container
-docker exec edufika-session-api env
-```
-
-### Port Already in Use
+**Container Issues:**
 ```
 bash
-# Check what's using port 8091
-sudo lsof -i :8091
+# View app logs
+docker compose logs app
+
+# Check environment variables
+docker compose exec app env

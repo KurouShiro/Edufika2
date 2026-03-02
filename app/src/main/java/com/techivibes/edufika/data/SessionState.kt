@@ -32,8 +32,20 @@ object SessionState {
         private set
     var currentExamUrl: String = ""
         private set
+    var examModeActive: Boolean = false
+        private set
     var heartbeatSequence: Long = 0L
         private set
+
+    private val lastRiskEventMillisByType = mutableMapOf<String, Long>()
+    private val riskEventCooldownMs: Map<String, Long> = mapOf(
+        TestConstants.EVENT_APP_BACKGROUND to 4_000L,
+        TestConstants.EVENT_FOCUS_LOST to 4_000L,
+        TestConstants.EVENT_OVERLAY_DETECTED to 20_000L,
+        TestConstants.EVENT_ACCESSIBILITY_ACTIVE to 20_000L,
+        TestConstants.EVENT_REPEATED_VIOLATION to 6_000L,
+        TestConstants.EVENT_MEDIA_PROJECTION_ATTEMPT to 10_000L
+    )
 
     private var sessionStartMillis: Long = 0L
     private var sessionExpiryMillis: Long = 0L
@@ -57,7 +69,9 @@ object SessionState {
         lastSignatureRotationMillis = now
         lastHeartbeatMillis = lastSignatureRotationMillis
         currentExamUrl = ""
+        examModeActive = false
         heartbeatSequence = 0L
+        lastRiskEventMillisByType.clear()
         sessionStartMillis = now
         sessionExpiryMillis = sessionExpiresAtMillis?.let { max(now, it) } ?: (sessionStartMillis + durationMillis)
         onStateChanged?.invoke()
@@ -70,6 +84,10 @@ object SessionState {
 
     fun isStudentSessionActive(): Boolean {
         return currentRole == UserRole.STUDENT && !isSessionExpired()
+    }
+
+    fun isStudentExamSessionActive(): Boolean {
+        return isStudentSessionActive() && examModeActive && currentExamUrl.isNotBlank()
     }
 
     fun markHeartbeatNow() {
@@ -88,17 +106,24 @@ object SessionState {
         onStateChanged?.invoke()
     }
 
+    fun setExamModeActive(active: Boolean) {
+        examModeActive = active
+        onStateChanged?.invoke()
+    }
+
     fun restoreRuntimeState(
         risk: Int,
         lastSignatureRotation: Long,
         lastHeartbeat: Long,
         examUrl: String,
-        heartbeatSeq: Long
+        heartbeatSeq: Long,
+        examMode: Boolean
     ) {
         riskScore = risk.coerceAtLeast(0)
         lastSignatureRotationMillis = lastSignatureRotation.coerceAtLeast(0L)
         lastHeartbeatMillis = lastHeartbeat.coerceAtLeast(0L)
         currentExamUrl = examUrl
+        examModeActive = examMode
         heartbeatSequence = heartbeatSeq.coerceAtLeast(0L)
         onStateChanged?.invoke()
     }
@@ -120,6 +145,9 @@ object SessionState {
     }
 
     fun registerRiskEvent(event: String): Int {
+        if (shouldSuppressRiskEvent(event)) {
+            return riskScore
+        }
         val increment = when (event) {
             TestConstants.EVENT_APP_BACKGROUND -> TestConstants.RISK_APP_BACKGROUND
             TestConstants.EVENT_OVERLAY_DETECTED -> TestConstants.RISK_OVERLAY_DETECTED
@@ -136,6 +164,17 @@ object SessionState {
         }
         riskScore += increment
         return riskScore
+    }
+
+    private fun shouldSuppressRiskEvent(event: String): Boolean {
+        val cooldownMs = riskEventCooldownMs[event] ?: return false
+        val now = System.currentTimeMillis()
+        val previous = lastRiskEventMillisByType[event] ?: 0L
+        if (previous > 0L && now - previous < cooldownMs) {
+            return true
+        }
+        lastRiskEventMillisByType[event] = now
+        return false
     }
 
     fun riskLocked(): Boolean = riskScore >= TestConstants.RISK_LOCK_THRESHOLD
@@ -157,7 +196,9 @@ object SessionState {
         riskScore = 0
         lastHeartbeatMillis = 0L
         currentExamUrl = ""
+        examModeActive = false
         heartbeatSequence = 0L
+        lastRiskEventMillisByType.clear()
         sessionStartMillis = 0L
         sessionExpiryMillis = 0L
         onStateChanged?.invoke()

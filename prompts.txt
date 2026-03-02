@@ -3,9 +3,10 @@
 
 ## Target
 
-* Android 10+
+* Android 9+
 * Device Umum (Bukan BYOD)
 * Full build untuk diaplikasikan dalam sekolah
+* Build APK mendukung ARM 32-bit + 64-bit (serta x86/x86_64 untuk emulator/testing)
 
 ## Bahasa Pemrograman
 
@@ -13,7 +14,7 @@
 * Java
 * MySQL / MariaDB (**migrated from PostgreSQL runtime**)
 * React Native Hybrid
-* **Node.js / Ktor API (Session Authority & Exam Control Backend)**
+* **Node.js / Express API (Session Authority & Exam Control Backend)**
 * **phpMyAdmin (Database administration UI for local debugging)**
 
 ## Library Pengembangan
@@ -26,13 +27,15 @@
 * LifecycleObserver
 * MediaProjection (Detection Only)
 * WebRTC
-* ReactVisionCamera ("npm install react-native-vision-camera")
+* CameraX (androidx.camera:camera-core/camera2/camera-lifecycle/camera-view)
+* Google ML Kit Barcode Scanning
+* ZXing Android Embedded (fallback helper)
 
 ---
 
 ## Gambaran UX/UI
 
-Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aksen style terminal dengan warna neon green dan font JetBrains Mono (font, design tombol-tombol, navbar, dll).
+Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aksen style terminal dengan warna neon green dan font Montserrat (font, design tombol-tombol, navbar, dll), plus tema warna/gradient yang dapat diganti.
 
 ---
 
@@ -50,7 +53,7 @@ Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aks
 * BackgroundViolationTest.kt
 * ScreenOffViolationTest.kt
 * RestartViolationTest.kt
-* **HeartbeatService.kt (Kirim status perangkat setiap 5Ã¢â‚¬â€œ10 detik)**
+* **HeartbeatService.kt (Kirim status perangkat setiap 5-10 detik)**
 * **IntegrityCheck.kt (Root / Emulator / Debugger Detection)**
 * **FocusMonitor.kt (Deteksi aplikasi keluar / multi-window)**
 * **TokenRegistry.kt (Registry token lokal + expiry metadata untuk mode debug/admin)**
@@ -58,11 +61,15 @@ Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aks
 * **Session expiry enforcement (popup + auto shutdown saat token kadaluarsa)**
 * **SessionLogger -> logger.txt (log lokal untuk audit device-side)**
 * **Proctor PIN verification via backend API (validitas harian)**
-* **Proctor PIN assignment wajib memilih `student_token (S-...)` agar PIN benar-benar terikat per sesi siswa**
+* **Proctor PIN assignment mendukung mode per-token (`student_token`) dan bulk all-student (`set-all`)**
 * **SessionClient menyimpan detail HTTP error backend (bukan hanya `server unavailable`) untuk debugging yang lebih presisi**
 * **Admin control session otomatis refresh signature melalui `/session/reconnect` saat signature lama kedaluwarsa**
 * **SessionClient health-check endpoint (`/health`) untuk validasi koneksi backend**
 * **DeveloperAccessPanel mendukung konfigurasi backend LAN URL untuk WiFi debugging (`http://<PC_IP>:8091`)**
+* **MainActivity bootstraps React Native UI saat startup dengan fallback aman ke native UI bila RN gagal**
+* **ReactNativeHostActivity mendukung dual-volume keybind (VOL+ + VOL-) untuk menonaktifkan RN UI saat runtime**
+* **SecurityBridgeModule membuka scanner QR native (`openCameraXQrScanner`) tanpa dependensi VisionCamera**
+* **ScreenOffReceiver memakai alarm kustom `fahhhhhhhhhhhhhh.mp3` dan diputar sekali (non-loop)**
 
 ---
 
@@ -88,18 +95,26 @@ Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aks
 * **IntegrityWarningModal.tsx (Peringatan otomatis jika perilaku mencurigakan)**
 * **LoginScreen.tsx (Exit button tersedia sebelum login untuk shutdown app terkontrol)**
 * **Settings.tsx (Localization aktif: Bahasa Indonesia dan English benar-benar diterapkan ke UI)**
+* **Settings.tsx + Layout.tsx (Theme setting 7 preset warna/gradient: matrix, ocean, sunset, ember, aurora, violet, graphite)**
 * **Keypad.tsx (Dukungan huruf kecil/kapital + tombol dash `-` + copy/paste input token/password)**
 * **AdminDashboardPanel.tsx (Token expiry input + copy token + submit Proctor PIN policy)**
+* **AdminDashboardPanel.tsx (Batch generate token siswa hingga 300 + copy semua token sekaligus)**
+* **AdminDashboardPanel.tsx (Tap-select active token pada batch list agar URL/PIN bisa diarahkan ke token terpilih)**
 * **AdminDashboardPanel.tsx (Monitor tab: pause/resume/reissue signature controls terhubung ke backend)**
 * **AdminDashboardPanel.tsx (Monitor tab: daftar token + status + IP + nama perangkat)**
 * **AdminDashboardPanel.tsx (Token URL binding sinkron ke backend whitelist + backend launch URL)**
+* **AdminDashboardPanel.tsx (Bulk URL binding + bulk PIN binding ke seluruh token batch dalam satu aksi)**
 * **DeveloperAccessScreen.tsx (Generate admin token + expiry + copy)**
-* **DeveloperAccessScreen.tsx (Scrollable penuh + input backend URL + tes koneksi backend + base URL persisten lintas sesi)**
+* **DeveloperAccessScreen.tsx (Scrollable penuh + input backend URL + tes koneksi backend + base URL persisten lintas sesi, default: `http://103.27.207.53:8091`)**
 * **ExamBrowserScreen.tsx (Token countdown timer + expiry popup + auto exit)**
 * **Token URL binding di RN sinkron ke backend (/session/whitelist/add) dan launch URL (/exam/launch) agar whitelist konsisten antar client**
+* **Proctor PIN bulk sync di RN mendahulukan endpoint backend `/session/proctor-pin/set-all`, lalu fallback per-token jika gagal**
 * **ExamBrowserScreen.tsx (Whitelist host-family aware untuk redirect Google host family)**
 * **App.tsx (Validasi whitelist menyertakan fallback token-bound URL + log `bound URL`)**
+* **App.tsx (Lazy-loading `QRScannerScreen` dan `ExamBrowserScreen` agar startup RN lebih stabil di release)**
+* **App.tsx (Claim backend `S-/A-` langsung hydrate `launch_url` + `whitelist` ke state RN untuk multi-device consistency)**
 * **Admin dashboard layout scrollable penuh untuk layar kecil + logout button selalu dapat diakses**
+* **QRScannerScreen.tsx (Menggunakan CameraX QR scanner native via bridge, kompatibel Android 9+)**
 
 ---
 
@@ -177,13 +192,14 @@ Session Token adalah:
 
 Exam Session Token
 - Dibuat oleh Proktor
-- Pair token dibuat per sesi (`S-*` siswa, `A-*` admin/proktor)
+- Pair token dibuat per sesi (`S-*` siswa, `A-*` admin/proktor) dengan dukungan multi-student token dalam satu sesi
+- Batch token dapat dibuat sekaligus (contoh 300 siswa + 1 admin) dari satu sesi backend
 - Di-claim oleh Device Siswa
 - Device Binding Dilakukan
 - Kebijakan PIN proktor diturunkan ke binding siswa saat claim
 - Expiry timestamp dikirim ke client
-- Access Signature Rotasi Setiap Â±5 Menit
-- Heartbeat wajib setiap 5â€“10 detik
+- Access Signature Rotasi Setiap sekitar 5 Menit
+- Heartbeat wajib setiap 5-10 detik
 - Risiko dihitung server
 - Proktor dapat pause/resume session secara live
 - Proktor dapat reissue signature siswa tanpa membuat token baru
@@ -191,7 +207,7 @@ Exam Session Token
 
 ---
 
-## Backend Architecture (Node.js / Ktor API)
+## Backend Architecture (Node.js / Express API)
 
 Backend berfungsi sebagai:
 **Exam Session Authority (Single Source of Truth)**
@@ -209,11 +225,13 @@ Bukan sekadar authentication server.
 * Mengelola launch URL untuk mode lockdown web browser (Google Forms/web host)
 * Mengelola kebijakan Proctor PIN harian
 * Proctor PIN policy bersifat **session-scoped**: template di `session_student_pin_templates`, lalu dibinding ke `binding_id` siswa di `session_proctor_pins`
-* Mengelola token pair per exam session: satu `S-*` (student) dan satu `A-*` (admin/proctor)
+* Mengelola token per exam session: multi `S-*` (student) dalam satu sesi + satu `A-*` (admin/proctor)
+* Mendukung bulk set PIN untuk seluruh token siswa sesi yang sama (`/session/proctor-pin/set-all`)
 * Mengirim metadata expiry token ke client untuk countdown/enforcement
 * Mendukung reconnect signature (`/session/reconnect`) untuk recovery signature/admin control tanpa membuat sesi baru
 * Menyediakan kontrol sesi live dari proktor: pause/resume/reissue signature/revoke student
 * Menyediakan endpoint monitor token realtime (status online/offline/revoked/expired + ip/device)
+* Timeout heartbeat mengunci binding siswa yang stale tanpa mematikan seluruh sesi
 * Fokus pada session authority + launch URL host pihak ketiga (tanpa menyimpan bank soal lokal)
 * Mencatat seluruh aktivitas audit
 * Auto-archive + cleanup sesi selesai/revoke ke `session_cleanup_audit`
@@ -242,6 +260,7 @@ POST /session/whitelist/verify -> Validasi URL terhadap whitelist server
 GET /exam/launch -> Ambil launch URL browser exam
 POST /exam/launch -> Update launch URL (admin/developer only)
 POST /session/proctor-pin/set -> Simpan PIN proktor (refresh harian)
+POST /session/proctor-pin/set-all -> Simpan PIN proktor untuk semua token siswa dalam sesi
 POST /session/proctor-pin/verify -> Verifikasi PIN proktor saat exit exam
 GET /session/proctor-pin/status -> Cek status PIN proktor hari ini
 GET /health -> Tes koneksi backend dari client (DeveloperAccess/Admin)
@@ -262,7 +281,7 @@ timestamp: xxx
 }
 
 Jika heartbeat berhenti >30 detik:
-Session otomatis dikunci server.
+Binding siswa dapat masuk status DEGRADED/SUSPENDED; pada batas lock hanya binding stale yang dikunci (bukan seluruh sesi).
 Jika proktor pause session:
 heartbeat tetap tercatat tetapi status sesi `PAUSED` sampai proktor resume.
 
@@ -281,7 +300,7 @@ Setiap kejadian meningkatkan skor:
 | Repeated violations  | +6    |
 
 Jika melewati threshold:
-Session Ã¢â€ â€™ LOCKED (butuh verifikasi proktor).
+Session -> LOCKED (butuh verifikasi proktor).
 
 ---
 
@@ -320,6 +339,8 @@ Menggunakan:
 * Immersive mode
 * Focus monitoring
 * Behavioral detection
+* Kiosk mode aktif default pada startup app (state reset tiap launch)
+* RN host mendeteksi split-screen dan memicu lock/violation flow otomatis
 * Reset state setiap launch (kiosk disable state tidak dipersisten antar reboot app)
 * Setelah logout, soft-kiosk dilepas agar user dapat keluar aplikasi secara normal
 
@@ -362,6 +383,7 @@ edufika-session-api/
 |-- src/db/migrations/mysql/001_init.sql
 |-- src/db/migrations/mysql/002_student_pin_templates_per_token.sql
 |-- src/db/migrations/mysql/003_add_device_name.sql
+|-- src/db/migrations/mysql/004_allow_multiple_student_tokens.sql
 |-- Dockerfile
 |-- .dockerignore
 |-- docker-compose.yml
@@ -370,6 +392,12 @@ edufika-session-api/
 `-- README.md
 
 backenddebug.txt
+
+QRGenPy/
+|-- generate_qr.py
+|-- requirements.txt
+|-- README.md
+`-- form_qr.png
 
 setup/
 |-- quick-install-debug.bat
@@ -397,6 +425,11 @@ app/src/main/java/com/techivibes/edufika/
 |   `-- TestUtils.kt
 |-- recovery/
 |   `-- BootRecoveryReceiver.kt
+|-- rn/
+|   |-- SecurityBridgeModule.kt
+|   `-- CameraXQrScannerActivity.kt
+|-- res/layout/
+|   `-- activity_camerax_qr_scanner.xml
 `-- runners/
     `-- CustomTestRunner.kt
 ```
@@ -533,7 +566,7 @@ adb connect <PHONE_IP>:<CONNECT_PORT>
 adb devices
 ```
 
-2. Android 10 or older (USB once, then WiFi)
+2. Android 9 or older (USB once, then WiFi)
 - Connect USB first:
 ```bat
 adb tcpip 5555
@@ -567,4 +600,6 @@ Your current `setup\quick-usb-debug.bat` is USB+reverse mode, not WiFi mode.
 
 URL Whitelist/Token testing link : https://docs.google.com/forms/d/1y51jnoNjYvZWYkhPqJLsfHWRDxXr_iA-zPK8VY4-vcA/viewform
 
+Portainer Login : Admin
+Password : Notwilliam123
 ---

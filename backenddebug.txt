@@ -269,3 +269,7 @@ LIMIT 20;
 5. Test LAN health: http://<PC_LAN_IP>:8091/health
 6. Set app backend URL: http://<PC_LAN_IP>:8091
 7. Run token + whitelist + heartbeat test in app
+Portainer Username :
+admin
+Portainer Password :
+Notwilliam123_

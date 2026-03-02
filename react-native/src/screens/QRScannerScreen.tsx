@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useRef } from "react";
-import { ActivityIndicator, Animated, Easing, StyleSheet, Text, View } from "react-native";
-import { Camera, useCameraDevice, useCameraPermission, useCodeScanner } from "react-native-vision-camera";
+import React, { useMemo, useState } from "react";
+import { ActivityIndicator, NativeModules, StyleSheet, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
 import Layout, { TerminalButton, TerminalInput } from "./Layout";
 
@@ -13,6 +12,14 @@ type QRScannerScreenProps = {
   onBack: () => void;
 };
 
+type EdufikaSecurityModuleShape = {
+  openCameraXQrScanner?: () => Promise<string>;
+};
+
+const securityModule: EdufikaSecurityModuleShape | undefined = (
+  NativeModules as { EdufikaSecurity?: EdufikaSecurityModuleShape }
+).EdufikaSecurity;
+
 export default function QRScannerScreen({
   language,
   manualValue,
@@ -21,70 +28,88 @@ export default function QRScannerScreen({
   onDetectedValue,
   onBack,
 }: QRScannerScreenProps) {
-  const hasScannedRef = useRef(false);
-  const scanlineValue = useRef(new Animated.Value(0)).current;
-  const { hasPermission, requestPermission } = useCameraPermission();
-  const cameraDevice = useCameraDevice("back");
+  const [scanInProgress, setScanInProgress] = useState(false);
+  const [scanStatus, setScanStatus] = useState(
+    tr(
+      language,
+      "CAMERAX SCANNER SIAP. GUNAKAN TOMBOL MULAI.",
+      "CAMERAX SCANNER READY. USE START BUTTON."
+    )
+  );
 
-  useEffect(() => {
-    if (!hasPermission) {
-      requestPermission();
+  const startCameraScan = async () => {
+    if (scanInProgress) {
+      return;
     }
-  }, [hasPermission, requestPermission]);
 
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(scanlineValue, {
-          toValue: 1,
-          duration: 2000,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        }),
-        Animated.timing(scanlineValue, {
-          toValue: 0,
-          duration: 100,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        }),
-      ])
+    if (!securityModule?.openCameraXQrScanner) {
+      setScanStatus(
+        tr(
+          language,
+          "MODUL CAMERAX TIDAK TERSEDIA. GUNAKAN INPUT MANUAL.",
+          "CAMERAX MODULE NOT AVAILABLE. USE MANUAL INPUT."
+        )
+      );
+      return;
+    }
+
+    setScanInProgress(true);
+    setScanStatus(
+      tr(
+        language,
+        "MEMBUKA CAMERAX SCANNER...",
+        "OPENING CAMERAX SCANNER..."
+      )
     );
-    loop.start();
-    return () => loop.stop();
-  }, [scanlineValue]);
 
-  const codeScanner = useCodeScanner({
-    codeTypes: ["qr"],
-    onCodeScanned: (codes) => {
-      if (hasScannedRef.current) {
+    try {
+      const value = await securityModule.openCameraXQrScanner();
+      const normalized = String(value ?? "").trim();
+      if (!normalized) {
+        setScanStatus(
+          tr(
+            language,
+            "QR TIDAK TERBACA. ULANGI SCAN ATAU INPUT MANUAL.",
+            "QR NOT DETECTED. RETRY SCAN OR USE MANUAL INPUT."
+          )
+        );
         return;
       }
-      const value = codes?.[0]?.value;
-      if (!value) {
-        return;
+      setScanStatus(
+        tr(
+          language,
+          "QR BERHASIL TERBACA.",
+          "QR DETECTED SUCCESSFULLY."
+        )
+      );
+      onDetectedValue(normalized);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.toLowerCase().includes("cancel")) {
+        setScanStatus(
+          tr(
+            language,
+            "SCAN DIBATALKAN. GUNAKAN TOMBOL MULAI UNTUK MENGULANG.",
+            "SCAN CANCELED. USE START BUTTON TO RETRY."
+          )
+        );
+      } else {
+        setScanStatus(
+          tr(
+            language,
+            "SCAN GAGAL. CEK IZIN KAMERA ATAU GUNAKAN INPUT MANUAL.",
+            "SCAN FAILED. CHECK CAMERA PERMISSION OR USE MANUAL INPUT."
+          )
+        );
       }
-      hasScannedRef.current = true;
-      onDetectedValue(value);
-      setTimeout(() => {
-        hasScannedRef.current = false;
-      }, 1200);
-    },
-  });
+    } finally {
+      setScanInProgress(false);
+    }
+  };
 
   const statusLabel = useMemo(() => {
-    if (!hasPermission) {
-      return tr(language, "IZIN KAMERA DIPERLUKAN", "CAMERA PERMISSION REQUIRED");
-    }
-    if (!cameraDevice) {
-      return tr(language, "KAMERA TIDAK TERSEDIA", "NO CAMERA DEVICE");
-    }
-    return tr(language, "SECURE LENS ACTIVE", "SECURE LENS ACTIVE");
-  }, [cameraDevice, hasPermission, language]);
-
-  const scanlineTranslate = scanlineValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [6, 244],
-  });
+    return scanStatus;
+  }, [scanStatus]);
 
   return (
     <Layout
@@ -92,27 +117,26 @@ export default function QRScannerScreen({
       subtitle={tr(language, "Arahkan kode QR ke area pemindai.", "Align QR code in scanner viewfinder.")}
     >
       <View style={styles.cameraWrap}>
-        {hasPermission && cameraDevice ? (
-          <Camera style={StyleSheet.absoluteFill} device={cameraDevice} isActive codeScanner={codeScanner} />
-        ) : (
-          <View style={styles.placeholder}>
-            <ActivityIndicator size="small" color="#22c55e" />
-            <Text style={styles.placeholderText}>
-              {hasPermission
-                ? tr(language, "Menyiapkan kamera...", "Preparing camera...")
-                : tr(language, "Kamera membutuhkan izin.", "Camera needs permission.")}
-            </Text>
-            {!hasPermission ? (
-              <TerminalButton label={tr(language, "Izinkan Kamera", "Grant Camera Permission")} variant="outline" onPress={requestPermission} />
-            ) : null}
-          </View>
-        )}
-
-        <View style={styles.cornerTopLeft} />
-        <View style={styles.cornerTopRight} />
-        <View style={styles.cornerBottomLeft} />
-        <View style={styles.cornerBottomRight} />
-        <Animated.View style={[styles.scanline, { transform: [{ translateY: scanlineTranslate }] }]} />
+        <View style={styles.placeholder}>
+          {scanInProgress ? <ActivityIndicator size="small" color="#22c55e" /> : null}
+          <Text style={styles.placeholderTitle}>
+            {tr(language, "CameraX QR Scanner", "CameraX QR Scanner")}
+          </Text>
+          <Text style={styles.placeholderText}>
+            {tr(
+              language,
+              "Scanner kamera berjalan dari modul native Android (CameraX) agar kompatibel Android 9+.",
+              "Camera scanner runs from native Android CameraX module for Android 9+ compatibility."
+            )}
+          </Text>
+          <TerminalButton
+            label={tr(language, "Mulai Scan Kamera", "Start Camera Scan")}
+            onPress={() => {
+              void startCameraScan();
+            }}
+            disabled={scanInProgress}
+          />
+        </View>
       </View>
 
       <Text style={styles.statusText}>{statusLabel}</Text>
@@ -143,8 +167,14 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: 10,
+    gap: 8,
     paddingHorizontal: 20,
+  },
+  placeholderTitle: {
+    color: "#f9fafb",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 14,
+    letterSpacing: 0.4,
   },
   placeholderText: {
     color: "#d1d5db",
@@ -158,61 +188,5 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginBottom: 8,
     letterSpacing: 0.8,
-  },
-  cornerTopLeft: {
-    position: "absolute",
-    top: 14,
-    left: 14,
-    width: 32,
-    height: 32,
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
-    borderColor: "#22c55e",
-    borderTopLeftRadius: 6,
-  },
-  cornerTopRight: {
-    position: "absolute",
-    top: 14,
-    right: 14,
-    width: 32,
-    height: 32,
-    borderTopWidth: 3,
-    borderRightWidth: 3,
-    borderColor: "#22c55e",
-    borderTopRightRadius: 6,
-  },
-  cornerBottomLeft: {
-    position: "absolute",
-    bottom: 14,
-    left: 14,
-    width: 32,
-    height: 32,
-    borderBottomWidth: 3,
-    borderLeftWidth: 3,
-    borderColor: "#22c55e",
-    borderBottomLeftRadius: 6,
-  },
-  cornerBottomRight: {
-    position: "absolute",
-    bottom: 14,
-    right: 14,
-    width: 32,
-    height: 32,
-    borderBottomWidth: 3,
-    borderRightWidth: 3,
-    borderColor: "#22c55e",
-    borderBottomRightRadius: 6,
-  },
-  scanline: {
-    position: "absolute",
-    left: 18,
-    right: 18,
-    top: 0,
-    height: 2,
-    backgroundColor: "rgba(34,197,94,0.82)",
-    shadowColor: "#22c55e",
-    shadowOpacity: 0.5,
-    shadowRadius: 7,
-    shadowOffset: { width: 0, height: 0 },
   },
 });

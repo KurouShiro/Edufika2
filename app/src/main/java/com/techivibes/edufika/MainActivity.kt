@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -29,6 +30,8 @@ import com.techivibes.edufika.security.RestartViolationTest
 import com.techivibes.edufika.security.ScreenLock
 import com.techivibes.edufika.security.ScreenOffReceiver
 import com.techivibes.edufika.security.ScreenOffViolationTest
+import com.techivibes.edufika.security.WindowModeDetector
+import com.techivibes.edufika.security.WindowViolationGuard
 import com.techivibes.edufika.utils.TestConstants
 import com.techivibes.edufika.utils.TestUtils
 
@@ -39,6 +42,12 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_RN_BOOT_PENDING = "pref_rn_boot_pending"
         private const val PREF_RN_BOOT_PENDING_AT = "pref_rn_boot_pending_at"
         private const val RN_BOOT_FAIL_WINDOW_MS = 20_000L
+        private const val MULTI_WINDOW_LOCK_REASON =
+            "Multi-window/split-screen terdeteksi. Sesi dikunci demi integritas ujian."
+        private const val FOCUS_LOSS_LOCK_REASON =
+            "Aplikasi kehilangan fokus saat sesi ujian aktif."
+        private const val FOCUS_LOSS_LOCK_DELAY_MS = 800L
+        private const val VIOLATION_DEDUPE_WINDOW_MS = 2_500L
     }
 
     private lateinit var navController: NavController
@@ -47,7 +56,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var focusMonitor: FocusMonitor
     private lateinit var sessionLogger: SessionLogger
     private var receiversRegistered = false
+    private val windowViolationGuard = WindowViolationGuard()
+    private var focusLossLockPending = false
+    private var lastViolationAtMs = 0L
+    private var lastViolationMessage = ""
     private val sessionExpiryHandler = Handler(Looper.getMainLooper())
+    private val focusLossHandler = Handler(Looper.getMainLooper())
     private var expiryDialogShown = false
 
     private val sessionExpiryRunnable = object : Runnable {
@@ -133,7 +147,11 @@ class MainActivity : AppCompatActivity() {
         }
         screenOffViolationTest.register()
         registerInternalReceivers()
-        HeartbeatService.start(this)
+        if (isViolationSystemEnabled()) {
+            HeartbeatService.start(this)
+        } else {
+            HeartbeatService.stop(this)
+        }
         resetKioskModeForNewLaunch()
         startSessionExpiryWatcher()
 
@@ -147,10 +165,17 @@ class MainActivity : AppCompatActivity() {
         if (::focusMonitor.isInitialized) {
             focusMonitor.refreshSignals()
         }
-        HeartbeatService.start(this)
+        if (isViolationSystemEnabled()) {
+            HeartbeatService.start(this)
+        } else {
+            HeartbeatService.stop(this)
+        }
         startSessionExpiryWatcher()
         if (isKioskModeEnabled()) {
             ScreenLock.apply(this)
+            if (isSplitScreenDetectionEnabled() && isViolationSystemEnabled()) {
+                enforceSingleWindowMode("onResume")
+            }
         }
     }
 
@@ -163,6 +188,8 @@ class MainActivity : AppCompatActivity() {
         }
         unregisterInternalReceivers()
         HeartbeatService.stop(this)
+        clearFocusLossLockCheck()
+        windowViolationGuard.reset()
         sessionExpiryHandler.removeCallbacks(sessionExpiryRunnable)
         RestartViolationTest.markCleanExit(this, isFinishing)
         super.onDestroy()
@@ -173,12 +200,27 @@ class MainActivity : AppCompatActivity() {
         if (::focusMonitor.isInitialized) {
             focusMonitor.onWindowFocusChanged(hasFocus)
         }
+        if (hasFocus) {
+            clearFocusLossLockCheck()
+            return
+        }
+        if (isKioskModeEnabled() && isViolationSystemEnabled() && isSplitScreenDetectionEnabled()) {
+            scheduleFocusLossLockCheck("onWindowFocusChanged")
+        }
     }
 
     override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean) {
         super.onMultiWindowModeChanged(isInMultiWindowMode)
         if (::focusMonitor.isInitialized) {
             focusMonitor.onMultiWindowModeChanged(isInMultiWindowMode)
+        }
+        if (
+            isInMultiWindowMode &&
+            isKioskModeEnabled() &&
+            isViolationSystemEnabled() &&
+            isSplitScreenDetectionEnabled()
+        ) {
+            enforceSingleWindowMode("onMultiWindowModeChanged")
         }
     }
 
@@ -208,14 +250,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyIntegrityBaseline() {
         val report = IntegrityCheck.evaluate()
-        if (report.rooted) {
-            handleRiskEvent(TestConstants.EVENT_OVERLAY_DETECTED, "IntegrityCheck: rooted device")
-        }
-        if (report.emulator) {
-            handleRiskEvent(TestConstants.EVENT_ACCESSIBILITY_ACTIVE, "IntegrityCheck: emulator device")
-        }
-        if (report.debugger) {
-            handleRiskEvent(TestConstants.EVENT_MEDIA_PROJECTION_ATTEMPT, "IntegrityCheck: debugger attached")
+        if (report.rooted || report.emulator || report.debugger) {
+            sessionLogger.append(
+                "INTEGRITY_WARN",
+                "Baseline integrity signal recorded (telemetry-only): ${report.details}"
+            )
         }
         sessionLogger.append("INTEGRITY", report.details)
     }
@@ -249,7 +288,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleRiskEvent(event: String, detail: String) {
-        if (!SessionState.isStudentSessionActive()) return
+        if (!isViolationSystemEnabled()) return
+        if (!SessionState.isStudentExamSessionActive()) return
         val score = SessionState.registerRiskEvent(event)
         sessionLogger.append(event, "$detail | score=$score")
         if (SessionState.riskLocked()) {
@@ -258,11 +298,47 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleViolation(message: String) {
-        if (!SessionState.isStudentSessionActive()) return
+        if (!isViolationSystemEnabled()) return
+        if (!SessionState.isStudentExamSessionActive()) return
+        val normalizedMessage = message.trim().ifBlank { "Unknown violation" }
+        val nowMs = SystemClock.elapsedRealtime()
+        if (
+            lastViolationMessage == normalizedMessage &&
+            nowMs - lastViolationAtMs < VIOLATION_DEDUPE_WINDOW_MS
+        ) {
+            sessionLogger.append("VIOLATION", "Duplicate violation suppressed: $normalizedMessage")
+            return
+        }
+        lastViolationAtMs = nowMs
+        lastViolationMessage = normalizedMessage
         SessionState.registerRiskEvent(TestConstants.EVENT_REPEATED_VIOLATION)
-        sessionLogger.append("VIOLATION", message)
+        sessionLogger.append("VIOLATION", normalizedMessage)
         ScreenOffReceiver.triggerAlarm(this)
-        navigateViolation(message)
+        navigateViolation(normalizedMessage)
+    }
+
+    private fun enforceSingleWindowMode(source: String) {
+        if (!isViolationSystemEnabled() || !isSplitScreenDetectionEnabled()) {
+            return
+        }
+        val snapshot = WindowModeDetector.capture(this)
+        val decision = windowViolationGuard.evaluate(
+            snapshot = snapshot,
+            examActive = SessionState.isStudentExamSessionActive()
+        )
+        if (!decision.shouldLock) {
+            return
+        }
+        sessionLogger.append(
+            "KIOSK",
+            "Split-screen detected in native host ($source). Forcing lock. ${snapshot.summary()} ${decision.summary()}"
+        )
+        handleRiskEvent(
+            TestConstants.EVENT_MULTI_WINDOW,
+            "Force-close path: multi-window detected ($source). ${snapshot.summary()} ${decision.summary()}"
+        )
+        handleViolation(MULTI_WINDOW_LOCK_REASON)
+        runCatching { ScreenLock.apply(this) }
     }
 
     private fun navigateViolation(message: String) {
@@ -276,11 +352,81 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun scheduleFocusLossLockCheck(source: String) {
+        if (!isViolationSystemEnabled() || !isSplitScreenDetectionEnabled()) {
+            return
+        }
+        if (focusLossLockPending || !SessionState.isStudentExamSessionActive()) {
+            return
+        }
+        focusLossLockPending = true
+        focusLossHandler.postDelayed(
+            {
+                focusLossLockPending = false
+                if (hasWindowFocus() || !SessionState.isStudentExamSessionActive()) {
+                    return@postDelayed
+                }
+                if (isPinEntryFocusBypassActive()) {
+                    sessionLogger.append(
+                        "KIOSK",
+                        "Focus loss ignored due to active proctor PIN entry bypass. source=$source"
+                    )
+                    return@postDelayed
+                }
+                val snapshot = WindowModeDetector.capture(this)
+                if (snapshot.imeVisible) {
+                    sessionLogger.append(
+                        "KIOSK",
+                        "Focus loss ignored due to IME visibility in native host ($source). ${snapshot.summary()}"
+                    )
+                    return@postDelayed
+                }
+                sessionLogger.append(
+                    "KIOSK",
+                    "Focus loss sustained in native host ($source). Forcing lock. ${snapshot.summary()}"
+                )
+                handleRiskEvent(
+                    TestConstants.EVENT_FOCUS_LOST,
+                    "Sustained focus loss detected ($source). ${snapshot.summary()}"
+                )
+                handleViolation(FOCUS_LOSS_LOCK_REASON)
+            },
+            FOCUS_LOSS_LOCK_DELAY_MS
+        )
+    }
+
+    private fun clearFocusLossLockCheck() {
+        focusLossLockPending = false
+        focusLossHandler.removeCallbacksAndMessages(null)
+    }
+
     private fun isKioskModeEnabled(): Boolean {
         return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE).getBoolean(
             TestConstants.PREF_APP_LOCK_ENABLED,
             true
         )
+    }
+
+    private fun isViolationSystemEnabled(): Boolean {
+        return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE).getBoolean(
+            TestConstants.PREF_VIOLATION_SYSTEM_ENABLED,
+            true
+        )
+    }
+
+    private fun isSplitScreenDetectionEnabled(): Boolean {
+        return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE).getBoolean(
+            TestConstants.PREF_SPLIT_SCREEN_DETECTION_ENABLED,
+            true
+        )
+    }
+
+    private fun isPinEntryFocusBypassActive(): Boolean {
+        val until = getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE).getLong(
+            TestConstants.PREF_PIN_ENTRY_FOCUS_BYPASS_UNTIL,
+            0L
+        )
+        return until > System.currentTimeMillis()
     }
 
     private fun resetKioskModeForNewLaunch() {

@@ -48,4 +48,6 @@
     <string name="resume_session">Resume Session</string>
     <string name="reissue_signature">Reissue Signature</string>
     <string name="revoke_session">Revoke Session</string>
+    <string name="qr_scanner_status_starting">Menyiapkan CameraX scanner...</string>
+    <string name="qr_scanner_status_ready">Arahkan kamera ke QR token / URL ujian</string>
 </resources>

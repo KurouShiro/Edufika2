@@ -68,6 +68,12 @@ export const proctorPinSetBodySchema = z.object({
   student_token: z.string().trim().min(1).optional(),
 });
 
+export const proctorPinSetAllBodySchema = z.object({
+  session_id: z.string().trim().min(1),
+  access_signature: z.string().trim().min(1),
+  pin: z.string().trim().min(4).max(32),
+});
+
 export const proctorPinVerifyBodySchema = z.object({
   session_id: z.string().trim().min(1),
   access_signature: z.string().trim().min(1),

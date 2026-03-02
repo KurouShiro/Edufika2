@@ -7,6 +7,7 @@ import {
   heartbeatBodySchema,
   reconnectBodySchema,
   proctorPinSetBodySchema,
+  proctorPinSetAllBodySchema,
   proctorPinStatusQuerySchema,
   proctorPinVerifyBodySchema,
   whitelistAddBodySchema,
@@ -183,6 +184,24 @@ export function createSessionRouter(service: SessionService): Router {
         ok: true,
         effective_date: result.effectiveDate,
         student_token: result.studentToken,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/proctor-pin/set-all", async (req, res, next) => {
+    try {
+      const parsed = proctorPinSetAllBodySchema.parse(req.body);
+      const result = await service.setProctorPinForAll(
+        parsed.session_id,
+        parsed.access_signature,
+        parsed.pin
+      );
+      res.json({
+        ok: true,
+        effective_date: result.effectiveDate,
+        updated_tokens: result.updatedTokens,
       });
     } catch (error) {
       next(error);

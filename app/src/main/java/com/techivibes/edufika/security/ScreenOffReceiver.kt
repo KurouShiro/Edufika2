@@ -6,6 +6,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.os.SystemClock
 import com.techivibes.edufika.R
 
 class ScreenOffReceiver : BroadcastReceiver() {
@@ -17,9 +18,17 @@ class ScreenOffReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        private const val ALARM_DEDUPE_WINDOW_MS = 2_500L
         private var activeMediaPlayer: MediaPlayer? = null
+        private var lastAlarmTriggerElapsedMs: Long = 0L
 
         fun triggerAlarm(context: Context) {
+            val nowMs = SystemClock.elapsedRealtime()
+            if (nowMs - lastAlarmTriggerElapsedMs < ALARM_DEDUPE_WINDOW_MS) {
+                return
+            }
+            lastAlarmTriggerElapsedMs = nowMs
+
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             forceMaxVolume(audioManager)
 
@@ -48,6 +57,7 @@ class ScreenOffReceiver : BroadcastReceiver() {
             runCatching { activeMediaPlayer?.stop() }
             runCatching { activeMediaPlayer?.release() }
             activeMediaPlayer = null
+            lastAlarmTriggerElapsedMs = 0L
         }
 
         private fun forceMaxVolume(audioManager: AudioManager) {

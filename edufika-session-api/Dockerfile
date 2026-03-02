@@ -8,10 +8,13 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json ./
 COPY tsconfig.json ./
 COPY src ./src
 
 RUN npm run build
+RUN mkdir -p /app/dist/db/migrations/mysql \
+ && cp -R /app/src/db/migrations/mysql/. /app/dist/db/migrations/mysql/
 RUN npm prune --omit=dev
 
 FROM node:20-alpine AS runtime

@@ -34,7 +34,7 @@ if (!sanitizedReactNativeArchitectures.isNullOrBlank()) {
     }
 }
 
-extra["minSdkVersion"] = 29
+extra["minSdkVersion"] = 28
 extra["targetSdkVersion"] = 36
 extra["compileSdkVersion"] = 36
 extra["kotlinVersion"] = "2.0.21"

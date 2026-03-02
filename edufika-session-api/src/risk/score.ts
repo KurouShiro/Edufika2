@@ -12,11 +12,11 @@ export type RiskEventInput = {
 export function calculateRisk(event: RiskEventInput): number {
   let score = 0;
 
-  if (!event.focus) score += 3;
+  if (!event.focus) score += 1;
   if (event.multi_window) score += 5;
-  if (event.overlay_detected) score += 5;
-  if (event.accessibility_active) score += 5;
-  if (event.debug_detected || event.emulator_detected || event.rooted) score += 2;
+  if (event.overlay_detected) score += 1;
+  if (event.accessibility_active) score += 1;
+  if (event.debug_detected || event.emulator_detected || event.rooted) score += 1;
 
   return score;
 }
@@ -26,9 +26,9 @@ export function violationSeverityFromType(type: string): number {
     case "APP_BACKGROUND":
       return 3;
     case "OVERLAY_DETECTED":
-      return 5;
+      return 1;
     case "ACCESSIBILITY_ACTIVE":
-      return 5;
+      return 1;
     case "NETWORK_DROP":
       return 0;
     case "OFFLINE_HEARTBEAT_SYNC":
@@ -38,7 +38,7 @@ export function violationSeverityFromType(type: string): number {
     case "POWER_WARNING":
       return 0;
     case "REPEATED_VIOLATION":
-      return 6;
+      return 3;
     case "MULTI_WINDOW":
       return 4;
     case "FOCUS_LOST":

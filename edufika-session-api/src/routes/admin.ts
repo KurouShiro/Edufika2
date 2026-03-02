@@ -107,9 +107,13 @@ export function createAdminRouter(service: SessionService): Router {
 
   router.get("/monitor", async (req, res, next) => {
     try {
+      const queryAccessSignature =
+        typeof req.query.access_signature === "string"
+          ? req.query.access_signature
+          : undefined;
       const parsed = monitorQuerySchema.parse({
         session_id: req.query.session_id,
-        access_signature: extractBearerToken(req),
+        access_signature: extractBearerToken(req) ?? queryAccessSignature,
       });
       const result = await service.getSessionMonitor(parsed.session_id, parsed.access_signature);
       res.json({

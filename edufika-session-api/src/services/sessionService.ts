@@ -92,10 +92,21 @@ export class SessionService {
     launchUrl: string | null;
   }> {
     const tokenTtlMinutes = Math.max(1, input.tokenTtlMinutes ?? config.defaultTokenTtlMinutes);
+    const requestedTokenCount = Math.max(2, input.tokenCount ?? 2);
+    const studentTokenCount = Math.max(1, requestedTokenCount - 1);
     const sessionId = uuidv4();
-    const studentToken = this.generateSessionToken("student");
-    const adminToken = this.generateSessionToken("admin");
-    const tokens = [studentToken, adminToken];
+    const generatedTokenSet = new Set<string>();
+    const nextUniqueToken = (role: "student" | "admin"): string => {
+      let token = this.generateSessionToken(role);
+      while (generatedTokenSet.has(token)) {
+        token = this.generateSessionToken(role);
+      }
+      generatedTokenSet.add(token);
+      return token;
+    };
+    const studentTokens = Array.from({ length: studentTokenCount }, () => nextUniqueToken("student"));
+    const adminToken = nextUniqueToken("admin");
+    const tokens = [...studentTokens, adminToken];
 
     const client = await dbPool.connect();
     try {
@@ -110,7 +121,7 @@ export class SessionService {
       );
 
       const roleTokenPairs: Array<{ role: "student" | "admin"; token: string }> = [
-        { role: "student", token: studentToken },
+        ...studentTokens.map((token) => ({ role: "student" as const, token })),
         { role: "admin", token: adminToken },
       ];
 
@@ -173,7 +184,7 @@ export class SessionService {
       return {
         sessionId,
         tokens,
-        token: studentToken,
+        token: studentTokens[0],
         launchUrl,
       };
     } catch (error) {
@@ -224,9 +235,12 @@ export class SessionService {
       }
 
       const tokenRow = tokenResult.rows[0];
-      if (toBoolean(tokenRow.claimed)) {
-        throw new ApiError(409, "Token already claimed");
+      const role = tokenRow.role;
+      const requestedRole = input.roleHint?.trim().toLowerCase();
+      if (requestedRole && requestedRole !== role) {
+        throw new ApiError(409, `Token role mismatch. Expected ${role}, received ${requestedRole}.`);
       }
+      const fingerprintHash = this.hashFingerprint(fingerprintSource);
 
       if (tokenRow.expires_at && Date.now() > new Date(tokenRow.expires_at).getTime()) {
         throw new ApiError(410, "Token expired");
@@ -236,71 +250,111 @@ export class SessionService {
         throw new ApiError(409, `Session is ${tokenRow.status}`);
       }
 
-      const role = tokenRow.role;
-      const requestedRole = input.roleHint?.trim().toLowerCase();
-      if (requestedRole && requestedRole !== role) {
-        throw new ApiError(409, `Token role mismatch. Expected ${role}, received ${requestedRole}.`);
-      }
-      const bindingId = uuidv4();
-      const fingerprintHash = this.hashFingerprint(fingerprintSource);
+      let bindingId = uuidv4();
+      let reclaimedAdminBinding = false;
 
-      await client.query(
-        `
-          UPDATE session_tokens
-          SET claimed = TRUE, claimed_at = now()
-          WHERE token = $1
-        `,
-        [input.token]
-      );
+      if (toBoolean(tokenRow.claimed)) {
+        if (role !== "admin") {
+          throw new ApiError(409, "Token already claimed");
+        }
 
-      await client.query(
-        `
-          INSERT INTO device_bindings
-            (id, token, role, device_fingerprint, ip_address, device_name, signature_version, risk_score, locked, created_at, last_seen_at)
-          VALUES
-            ($1, $2, $3, $4, $5, $6, 1, 0, FALSE, now(), now())
-        `,
-        [bindingId, input.token, role, fingerprintHash, input.ipAddress ?? null, input.deviceName?.trim() || null]
-      );
-
-      if (role === "student") {
-        const pinTemplateResult = await client.query<{
-          pin_hash: string;
-          effective_date: string;
-          updated_by_binding_id: string | null;
+        const existingBindingResult = await client.query<{
+          binding_id: string;
+          device_fingerprint: string | null;
         }>(
           `
-            SELECT pin_hash, DATE_FORMAT(effective_date, '%Y-%m-%d') AS effective_date, updated_by_binding_id
-            FROM session_student_pin_templates
-            WHERE exam_session_id = $1
-              AND student_token = $2
+            SELECT db.id AS binding_id, db.device_fingerprint
+            FROM device_bindings db
+            WHERE db.token = $1
+              AND db.role = 'admin'
+            ORDER BY db.created_at DESC
             LIMIT 1
+            FOR UPDATE
           `,
-          [tokenRow.exam_session_id, tokenRow.token]
+          [input.token]
         );
 
-        if ((pinTemplateResult.rowCount ?? 0) > 0) {
-          const pinTemplate = pinTemplateResult.rows[0];
-          await client.query(
+        if (existingBindingResult.rowCount === 0) {
+          throw new ApiError(409, "Admin token is already claimed but binding is missing");
+        }
+
+        const existingBinding = existingBindingResult.rows[0];
+        if (existingBinding.device_fingerprint && existingBinding.device_fingerprint !== fingerprintHash) {
+          throw new ApiError(409, "Admin token is bound to another device");
+        }
+
+        bindingId = existingBinding.binding_id;
+        reclaimedAdminBinding = true;
+        await client.query(
+          `
+            UPDATE device_bindings
+            SET locked = FALSE,
+                lock_reason = NULL,
+                device_fingerprint = COALESCE(device_fingerprint, $2),
+                last_seen_at = now()
+            WHERE id = $1
+          `,
+          [bindingId, fingerprintHash]
+        );
+      } else {
+        await client.query(
+          `
+            UPDATE session_tokens
+            SET claimed = TRUE, claimed_at = now()
+            WHERE token = $1
+          `,
+          [input.token]
+        );
+
+        await client.query(
+          `
+            INSERT INTO device_bindings
+              (id, token, role, device_fingerprint, ip_address, device_name, signature_version, risk_score, locked, created_at, last_seen_at)
+            VALUES
+              ($1, $2, $3, $4, $5, $6, 1, 0, FALSE, now(), now())
+          `,
+          [bindingId, input.token, role, fingerprintHash, input.ipAddress ?? null, input.deviceName?.trim() || null]
+        );
+
+        if (role === "student") {
+          const pinTemplateResult = await client.query<{
+            pin_hash: string;
+            effective_date: string;
+            updated_by_binding_id: string | null;
+          }>(
             `
-              INSERT INTO session_proctor_pins
-                (exam_session_id, binding_id, pin_hash, effective_date, updated_by_binding_id, updated_at)
-              VALUES
-                ($1, $2, $3, $4, $5, now())
-              ON DUPLICATE KEY UPDATE
-                pin_hash = VALUES(pin_hash),
-                effective_date = VALUES(effective_date),
-                updated_by_binding_id = VALUES(updated_by_binding_id),
-                updated_at = NOW()
+              SELECT pin_hash, DATE_FORMAT(effective_date, '%Y-%m-%d') AS effective_date, updated_by_binding_id
+              FROM session_student_pin_templates
+              WHERE exam_session_id = $1
+                AND student_token = $2
+              LIMIT 1
             `,
-            [
-              tokenRow.exam_session_id,
-              bindingId,
-              pinTemplate.pin_hash,
-              pinTemplate.effective_date,
-              pinTemplate.updated_by_binding_id,
-            ]
+            [tokenRow.exam_session_id, tokenRow.token]
           );
+
+          if ((pinTemplateResult.rowCount ?? 0) > 0) {
+            const pinTemplate = pinTemplateResult.rows[0];
+            await client.query(
+              `
+                INSERT INTO session_proctor_pins
+                  (exam_session_id, binding_id, pin_hash, effective_date, updated_by_binding_id, updated_at)
+                VALUES
+                  ($1, $2, $3, $4, $5, now())
+                ON DUPLICATE KEY UPDATE
+                  pin_hash = VALUES(pin_hash),
+                  effective_date = VALUES(effective_date),
+                  updated_by_binding_id = VALUES(updated_by_binding_id),
+                  updated_at = NOW()
+              `,
+              [
+                tokenRow.exam_session_id,
+                bindingId,
+                pinTemplate.pin_hash,
+                pinTemplate.effective_date,
+                pinTemplate.updated_by_binding_id,
+              ]
+            );
+          }
         }
       }
 
@@ -313,12 +367,14 @@ export class SessionService {
         [tokenRow.exam_session_id]
       );
 
-      const accessSignature = signAccessSignature({
-        sid: tokenRow.exam_session_id,
-        bid: bindingId,
-        ver: 1,
-        role,
-      });
+      const accessSignature = reclaimedAdminBinding
+        ? await this.rotateSignature(client, bindingId, tokenRow.exam_session_id, role)
+        : signAccessSignature({
+            sid: tokenRow.exam_session_id,
+            bid: bindingId,
+            ver: 1,
+            role,
+          });
 
       const launchUrl = await this.getLaunchUrlBySession(client, tokenRow.exam_session_id);
       const whitelist = await this.getWhitelistBySession(client, tokenRow.exam_session_id);
@@ -819,6 +875,111 @@ export class SessionService {
       return {
         effectiveDate,
         studentToken: target.studentToken,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async setProctorPinForAll(
+    sessionId: string,
+    accessSignature: string,
+    rawPin: string
+  ): Promise<{ effectiveDate: string; updatedTokens: number }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      if (auth.role === "student") {
+        throw new ApiError(403, "Student role cannot set proctor pin");
+      }
+
+      const pin = rawPin.trim();
+      if (pin.length < 4) {
+        throw new ApiError(400, "Proctor PIN must be at least 4 digits");
+      }
+
+      const studentCountResult = await client.query<{ total: number }>(
+        `
+          SELECT COUNT(*) AS total
+          FROM session_tokens
+          WHERE exam_session_id = $1
+            AND role = 'student'
+        `,
+        [sessionId]
+      );
+      const studentCount = Number(studentCountResult.rows[0]?.total ?? 0);
+      if (studentCount <= 0) {
+        throw new ApiError(404, "Student token not found for session");
+      }
+
+      const pinHash = this.hashFingerprint(`pin:${pin}`);
+
+      await client.query(
+        `
+          INSERT INTO session_student_pin_templates
+            (exam_session_id, student_token, pin_hash, effective_date, updated_by_binding_id, updated_at)
+          SELECT
+            st.exam_session_id,
+            st.token,
+            $1,
+            CURRENT_DATE,
+            $2,
+            now()
+          FROM session_tokens st
+          WHERE st.exam_session_id = $3
+            AND st.role = 'student'
+          ON DUPLICATE KEY UPDATE
+            student_token = VALUES(student_token),
+            pin_hash = VALUES(pin_hash),
+            effective_date = CURRENT_DATE,
+            updated_by_binding_id = VALUES(updated_by_binding_id),
+            updated_at = NOW()
+        `,
+        [pinHash, auth.bindingId, sessionId]
+      );
+
+      await client.query(
+        `
+          INSERT INTO session_proctor_pins
+            (exam_session_id, binding_id, pin_hash, effective_date, updated_by_binding_id, updated_at)
+          SELECT
+            st.exam_session_id,
+            db.id,
+            $1,
+            CURRENT_DATE,
+            $2,
+            now()
+          FROM session_tokens st
+          JOIN device_bindings db ON db.token = st.token
+          WHERE st.exam_session_id = $3
+            AND st.role = 'student'
+            AND db.role = 'student'
+          ON DUPLICATE KEY UPDATE
+            pin_hash = VALUES(pin_hash),
+            effective_date = CURRENT_DATE,
+            updated_by_binding_id = VALUES(updated_by_binding_id),
+            updated_at = NOW()
+        `,
+        [pinHash, auth.bindingId, sessionId]
+      );
+
+      await client.query("COMMIT");
+
+      const effectiveDate = dayjs().format("YYYY-MM-DD");
+      this.wsHub.broadcast("proctor_pin_updated", {
+        session_id: sessionId,
+        student_token: "ALL",
+        effective_date: effectiveDate,
+        updated_tokens: studentCount,
+      });
+
+      return {
+        effectiveDate,
+        updatedTokens: studentCount,
       };
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1494,6 +1655,7 @@ export class SessionService {
           JOIN exam_sessions es ON es.id = st.exam_session_id
           WHERE db.role = 'student'
             AND st.role = 'student'
+            AND db.locked = FALSE
             AND es.status IN ('ACTIVE', 'IN_PROGRESS', 'DEGRADED', 'SUSPENDED')
         `
       );
@@ -1511,7 +1673,6 @@ export class SessionService {
         let reason = "HEARTBEAT_OK";
 
         if (staleSeconds >= config.heartbeatLockSeconds) {
-          nextState = "LOCKED";
           reason = "HEARTBEAT_TIMEOUT";
           await client.query(
             `
@@ -1521,6 +1682,9 @@ export class SessionService {
             `,
             [row.binding_id]
           );
+          // Lock only the stale binding so other student/unclaimed tokens in the same
+          // session can continue to operate.
+          continue;
         } else if (staleSeconds >= config.heartbeatSuspendSeconds) {
           nextState = "SUSPENDED";
           reason = "HEARTBEAT_STALE_SUSPENDED";

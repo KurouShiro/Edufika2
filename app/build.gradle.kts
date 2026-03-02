@@ -20,6 +20,8 @@ react {
 }
 
 val ndkVersionValue = "29.0.14206865"
+val appVersionCode = (findProperty("APP_VERSION_CODE") as String?)?.toIntOrNull() ?: 2
+val appVersionName = (findProperty("APP_VERSION_NAME") as String?)?.trim()?.takeIf { it.isNotEmpty() } ?: "1.0.1"
 val signingPropertiesFile = listOf(
     rootProject.file("keystore.properties"),
     rootProject.file("keystone.properties")
@@ -53,7 +55,7 @@ val configuredReactNativeArchitectures = (findProperty("reactNativeArchitectures
     ?.map { it.trim() }
     ?.filter { it.isNotEmpty() }
     ?.toSet()
-    ?: setOf("armeabi-v7a", "arm64-v8a")
+    ?: setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
 val abiToNdkTriples = abiToNdkTriplesAll.filterKeys { configuredReactNativeArchitectures.contains(it) }
 
 val copyNdkLibcxx by tasks.registering(Copy::class) {
@@ -95,10 +97,11 @@ android {
 
     defaultConfig {
         applicationId = "com.techivibes.edufika"
-        minSdk = 29
+        // CameraX scanner supports Android 9+.
+        minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
         ndk {
             abiFilters += configuredReactNativeArchitectures
         }
@@ -108,6 +111,8 @@ android {
 
     buildTypes {
         debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
             isMinifyEnabled = false
             isShrinkResources = false
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -141,6 +146,12 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.srcDir(generatedLibcxxDir)
+        }
+    }
+    splits {
+        abi {
+            // Build a single installable APK to avoid split-install parse failures on tester devices.
+            isEnable = false
         }
     }
     packaging {
@@ -179,6 +190,32 @@ tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.co
     dependsOn(verifyReleaseJsBundle)
 }
 
+val assembleTesterRelease by tasks.registering {
+    group = "build"
+    description = "Builds release APK and verifies the installer artifact used for broad tester installs."
+    dependsOn("assembleRelease")
+    doLast {
+        val outputDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile
+        val releaseApk = outputDir
+            .listFiles()
+            ?.firstOrNull { file ->
+                file.isFile &&
+                    file.extension == "apk" &&
+                    (
+                        file.name.equals("app-release.apk", ignoreCase = true) ||
+                            file.name.contains("universal", ignoreCase = true)
+                    )
+            }
+        if (releaseApk == null) {
+            throw GradleException(
+                "Release APK not found in ${outputDir.absolutePath}. " +
+                    "Use the assembled release APK for tester distribution."
+            )
+        }
+        logger.lifecycle("Use this tester APK for distribution: ${releaseApk.absolutePath}")
+    }
+}
+
 dependencies {
     implementation("com.facebook.react:react-android")
     val hermesEnabled = (findProperty("hermesEnabled")?.toString()?.toBooleanStrictOrNull()) ?: true
@@ -205,6 +242,8 @@ dependencies {
     implementation("androidx.camera:camera-core:1.4.2")
     implementation("androidx.camera:camera-camera2:1.4.2")
     implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("io.github.webrtc-sdk:android:137.7151.05")
 

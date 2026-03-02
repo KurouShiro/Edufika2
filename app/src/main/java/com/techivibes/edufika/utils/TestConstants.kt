@@ -17,6 +17,8 @@ object TestConstants {
     const val PREF_URL_WHITELIST = "pref_url_whitelist"
     const val PREF_SESSION_LOGS = "pref_session_logs"
     const val PREF_APP_LOCK_ENABLED = "pref_app_lock_enabled"
+    const val PREF_VIOLATION_SYSTEM_ENABLED = "pref_violation_system_enabled"
+    const val PREF_SPLIT_SCREEN_DETECTION_ENABLED = "pref_split_screen_detection_enabled"
     const val PREF_PROCTOR_PIN = "pref_proctor_pin"
     const val PREF_LAST_EXIT_CLEAN = "pref_last_exit_clean"
     const val PREF_SERVER_BASE_URL = "pref_server_base_url"
@@ -24,9 +26,11 @@ object TestConstants {
     const val PREF_ISSUED_TOKENS = "pref_issued_tokens"
     const val PREF_LAST_STUDENT_TOKEN = "pref_last_student_token"
     const val PREF_SESSION_SNAPSHOT = "pref_session_snapshot"
+    const val PREF_ADMIN_WORKSPACE_CACHE = "pref_admin_workspace_cache"
     const val PREF_PENDING_RECOVERY_REASON = "pref_pending_recovery_reason"
     const val PREF_OFFLINE_EVENT_QUEUE = "pref_offline_event_queue"
     const val PREF_OFFLINE_HEARTBEAT_QUEUE = "pref_offline_heartbeat_queue"
+    const val PREF_PIN_ENTRY_FOCUS_BYPASS_UNTIL = "pref_pin_entry_focus_bypass_until"
     const val LOGGER_FILE_NAME = "logger.txt"
 
     const val ARG_EXAM_URL = "examUrl"
@@ -60,10 +64,10 @@ object TestConstants {
     const val EVENT_MEDIA_PROJECTION_ATTEMPT = "MEDIA_PROJECTION_ATTEMPT"
 
     const val RISK_APP_BACKGROUND = 3
-    const val RISK_OVERLAY_DETECTED = 5
-    const val RISK_ACCESSIBILITY_ACTIVE = 5
+    const val RISK_OVERLAY_DETECTED = 1
+    const val RISK_ACCESSIBILITY_ACTIVE = 1
     const val RISK_NETWORK_DROP = 2
-    const val RISK_REPEATED_VIOLATION = 6
+    const val RISK_REPEATED_VIOLATION = 3
     const val RISK_MULTI_WINDOW = 4
     const val RISK_FOCUS_LOST = 3
     const val RISK_MEDIA_PROJECTION_ATTEMPT = 2
