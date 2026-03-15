@@ -37,12 +37,14 @@ export function createSessionRouter(service: SessionService): Router {
         tokenCount: parsed.token_count,
         launchUrl: parsed.launch_url,
         tokenTtlMinutes: parsed.token_ttl_minutes,
+        examMode: parsed.exam_mode,
       });
       res.json({
         session_id: created.sessionId,
         token: created.token,
         tokens: created.tokens,
         launch_url: created.launchUrl,
+        exam_mode: created.examMode,
       });
     } catch (error) {
       next(error);
@@ -70,6 +72,7 @@ export function createSessionRouter(service: SessionService): Router {
         device_binding_id: claimed.bindingId,
         launch_url: claimed.launchUrl,
         whitelist: claimed.whitelist,
+        exam_mode: claimed.examMode,
       });
     } catch (error) {
       next(error);

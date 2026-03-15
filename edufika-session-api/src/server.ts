@@ -8,7 +8,9 @@ import { dbPool } from "./db/pool";
 import { startHeartbeatTimeoutWatcher } from "./heartbeat/timeoutWatcher";
 import { createAdminRouter } from "./routes/admin";
 import { createExamRouter } from "./routes/exam";
+import { createQuizRouter } from "./routes/quiz";
 import { createSessionRouter } from "./routes/session";
+import { createStudentRouter } from "./routes/student";
 import { ApiError, SessionService } from "./services/sessionService";
 import { WsHub } from "./services/wsHub";
 import { httpsOnlyMiddleware } from "./middleware/httpsOnly";
@@ -20,13 +22,20 @@ app.use(httpsOnlyMiddleware);
 const wsHub = new WsHub({ authToken: config.wsAuthToken });
 const sessionService = new SessionService(wsHub);
 
-app.get("/health", (_req, res) => {
+const apiRouter = express.Router();
+
+apiRouter.get("/health", (_req, res) => {
   res.json({ ok: true, service: "edufika-session-api", now: new Date().toISOString() });
 });
 
-app.use("/session", createSessionRouter(sessionService));
-app.use("/admin", createAdminRouter(sessionService));
-app.use("/exam", createExamRouter(sessionService));
+apiRouter.use("/session", createSessionRouter(sessionService));
+apiRouter.use("/student", createStudentRouter(sessionService));
+apiRouter.use("/admin", createAdminRouter(sessionService));
+apiRouter.use("/exam", createExamRouter(sessionService));
+apiRouter.use("/quiz", createQuizRouter(sessionService));
+
+app.use(apiRouter);
+app.use("/api", apiRouter);
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (error instanceof ApiError) {

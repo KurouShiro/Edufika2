@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import dayjs from "dayjs";
+import jwt from "jsonwebtoken";
 import { v4 as uuidv4 } from "uuid";
 import { config } from "../config";
 import { dbPool, DbClient } from "../db/pool";
@@ -9,6 +10,7 @@ import { WsHub } from "./wsHub";
 
 type Role = "student" | "admin" | "developer";
 type SessionState = "ACTIVE" | "IN_PROGRESS" | "DEGRADED" | "SUSPENDED" | "PAUSED" | "LOCKED" | "REVOKED" | "FINISHED";
+type ExamMode = "BROWSER_LOCKDOWN" | "HYBRID" | "IN_APP_QUIZ";
 
 type CreateSessionInput = {
   proctorId: string;
@@ -16,6 +18,7 @@ type CreateSessionInput = {
   tokenCount?: number;
   launchUrl?: string;
   tokenTtlMinutes?: number;
+  examMode?: ExamMode;
 };
 
 type ClaimSessionInput = {
@@ -71,9 +74,34 @@ type BindingAuthContext = {
   riskScore: number;
   locked: boolean;
   sessionStatus: SessionState;
+  examMode: ExamMode;
   signatureVersion: number;
   exp?: number;
 };
+
+type QuizOptionUpsertInput = {
+  key: string;
+  text: string;
+  isCorrect: boolean;
+};
+
+type QuizQuestionUpsertInput = {
+  subjectId: number;
+  questionText: string;
+  questionType?: "single_choice" | "multi_choice" | "multiple_correct" | "true_false" | "matching";
+  points?: number;
+  ordering?: number;
+  options: QuizOptionUpsertInput[];
+};
+
+type StudentAuthTokenPayload = {
+  sub?: string;
+  typ?: string;
+  iat?: number;
+  exp?: number;
+};
+
+const MAX_QUIZ_QUESTIONS_PER_SESSION = 40;
 
 export class ApiError extends Error {
   constructor(public readonly statusCode: number, message: string) {
@@ -90,10 +118,12 @@ export class SessionService {
     tokens: string[];
     token: string;
     launchUrl: string | null;
+    examMode: ExamMode;
   }> {
     const tokenTtlMinutes = Math.max(1, input.tokenTtlMinutes ?? config.defaultTokenTtlMinutes);
     const requestedTokenCount = Math.max(2, input.tokenCount ?? 2);
     const studentTokenCount = Math.max(1, requestedTokenCount - 1);
+    const examMode = input.examMode ?? "BROWSER_LOCKDOWN";
     const sessionId = uuidv4();
     const generatedTokenSet = new Set<string>();
     const nextUniqueToken = (role: "student" | "admin"): string => {
@@ -114,10 +144,10 @@ export class SessionService {
 
       await client.query(
         `
-          INSERT INTO exam_sessions (id, exam_name, created_by, start_time, status)
-          VALUES ($1, $2, $3, now(), 'ACTIVE')
+          INSERT INTO exam_sessions (id, exam_name, created_by, start_time, status, exam_mode)
+          VALUES ($1, $2, $3, now(), 'ACTIVE', $4)
         `,
-        [sessionId, input.examName ?? "Edufika Exam", input.proctorId]
+        [sessionId, input.examName ?? "Edufika Exam", input.proctorId, examMode]
       );
 
       const roleTokenPairs: Array<{ role: "student" | "admin"; token: string }> = [
@@ -178,6 +208,7 @@ export class SessionService {
         created_by: input.proctorId,
         token_ttl_minutes: tokenTtlMinutes,
         launch_url: launchUrl,
+        exam_mode: examMode,
         created_at: dayjs().toISOString(),
       });
 
@@ -186,6 +217,7 @@ export class SessionService {
         tokens,
         token: studentTokens[0],
         launchUrl,
+        examMode,
       };
     } catch (error) {
       await client.query("ROLLBACK");
@@ -204,6 +236,7 @@ export class SessionService {
     bindingId: string;
     launchUrl: string | null;
     whitelist: string[];
+    examMode: ExamMode;
   }> {
     const fingerprintSource =
       input.deviceFingerprint?.trim() || input.deviceBindingId?.trim() || input.ipAddress || "unknown-device";
@@ -217,11 +250,12 @@ export class SessionService {
         claimed: boolean;
         exam_session_id: string;
         status: string;
+        exam_mode: ExamMode;
         expires_at: Date | null;
         role: "student" | "admin";
       }>(
         `
-          SELECT st.token, st.claimed, st.exam_session_id, es.status, st.expires_at, st.role
+          SELECT st.token, st.claimed, st.exam_session_id, es.status, es.exam_mode, st.expires_at, st.role
           FROM session_tokens st
           JOIN exam_sessions es ON es.id = st.exam_session_id
           WHERE st.token = $1
@@ -397,10 +431,320 @@ export class SessionService {
         bindingId,
         launchUrl,
         whitelist,
+        examMode: normalizeExamMode(tokenRow.exam_mode),
       };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async registerStudentAccount(input: {
+    name: string;
+    studentClass: string;
+    elective: string;
+    username: string;
+    password: string;
+    schoolYear: string;
+  }): Promise<{
+    student: {
+      student_id: number;
+      name: string;
+      class: string;
+      elective: string;
+      username: string;
+      school_year: string;
+    };
+  }> {
+    const client = await dbPool.connect();
+    try {
+      const normalizedName = input.name.trim();
+      const normalizedUsername = input.username.trim().toLowerCase();
+      const normalizedClass = input.studentClass.trim();
+      const normalizedElective = input.elective.trim();
+      const normalizedSchoolYear = input.schoolYear.trim();
+      if (!normalizedName || !normalizedUsername || !input.password.trim()) {
+        throw new ApiError(400, "Student registration data is incomplete");
+      }
+      const parsedSchoolYear = dayjs(normalizedSchoolYear);
+      if (!parsedSchoolYear.isValid()) {
+        throw new ApiError(400, "Invalid school_year format");
+      }
+      const passwordHash = this.hashStudentPassword(input.password);
+
+      const insert = await client.query(
+        `
+          INSERT INTO student_accounts
+            (name, \`class\`, elective, username, password, school_year)
+          VALUES
+            ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          normalizedName,
+          normalizedClass,
+          normalizedElective,
+          normalizedUsername,
+          passwordHash,
+          parsedSchoolYear.format("YYYY-MM-DD HH:mm:ss"),
+        ]
+      );
+
+      const studentId = Number(insert.insertId ?? 0);
+      if (!Number.isFinite(studentId) || studentId <= 0) {
+        throw new ApiError(500, "Failed to create student account");
+      }
+
+      return {
+        student: {
+          student_id: studentId,
+          name: normalizedName,
+          class: normalizedClass,
+          elective: normalizedElective,
+          username: normalizedUsername,
+          school_year: parsedSchoolYear.toISOString(),
+        },
+      };
+    } catch (error: any) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        throw new ApiError(409, "Student account already exists");
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async loginStudentAccount(input: {
+    username: string;
+    password: string;
+  }): Promise<{
+    token: string;
+    expiresIn: number;
+    student: {
+      student_id: number;
+      name: string;
+      class: string;
+      elective: string;
+      username: string;
+      school_year: string;
+    };
+  }> {
+    const client = await dbPool.connect();
+    try {
+      const normalizedUsername = input.username.trim().toLowerCase();
+      if (!normalizedUsername || !input.password.trim()) {
+        throw new ApiError(400, "Username and password are required");
+      }
+      const result = await client.query<{
+        studentid: number;
+        name: string;
+        class_name: string;
+        elective: string;
+        username: string;
+        password: string;
+        school_year: string;
+      }>(
+        `
+          SELECT studentid, name, \`class\` AS class_name, elective, username, password,
+                 DATE_FORMAT(school_year, '%Y-%m-%dT%H:%i:%sZ') AS school_year
+          FROM student_accounts
+          WHERE username = $1
+          LIMIT 1
+        `,
+        [normalizedUsername]
+      );
+
+      if (result.rowCount === 0) {
+        throw new ApiError(401, "Invalid username or password");
+      }
+
+      const student = result.rows[0];
+      const passwordHash = this.hashStudentPassword(input.password);
+      if (student.password !== passwordHash) {
+        throw new ApiError(401, "Invalid username or password");
+      }
+
+      const token = this.signStudentAuthToken(student.studentid);
+      return {
+        token,
+        expiresIn: config.studentAuthTtlHours * 3600,
+        student: {
+          student_id: student.studentid,
+          name: student.name,
+          class: student.class_name,
+          elective: student.elective,
+          username: student.username,
+          school_year: student.school_year,
+        },
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async listActiveQuizSessions(studentAuthToken?: string): Promise<
+    Array<{
+      session_id: string;
+      exam_name: string | null;
+      quiz_title: string;
+      question_count: number;
+      duration_minutes: number;
+      status: string;
+      start_time: string | null;
+    }>
+  > {
+    await this.authenticateStudentAuthToken(studentAuthToken);
+    const client = await dbPool.connect();
+    try {
+      const result = await client.query<{
+        session_id: string;
+        exam_name: string | null;
+        quiz_title: string;
+        question_count: number;
+        duration_minutes: number;
+        status: string;
+        start_time: string | null;
+      }>(
+        `
+          SELECT
+            es.id AS session_id,
+            es.exam_name AS exam_name,
+            qe.title AS quiz_title,
+            COUNT(qq.id) AS question_count,
+            qe.duration_minutes AS duration_minutes,
+            es.status AS status,
+            DATE_FORMAT(es.start_time, '%Y-%m-%dT%H:%i:%sZ') AS start_time
+          FROM exam_sessions es
+          JOIN quiz_exams qe ON qe.exam_session_id = es.id
+          LEFT JOIN quiz_questions qq ON qq.exam_session_id = es.id AND qq.is_active = TRUE
+          WHERE es.status IN ('ACTIVE', 'IN_PROGRESS')
+            AND es.exam_mode IN ('IN_APP_QUIZ', 'HYBRID')
+            AND qe.published = TRUE
+          GROUP BY es.id, qe.title, qe.duration_minutes, es.exam_name, es.status, es.start_time
+          ORDER BY es.start_time DESC
+        `
+      );
+      return result.rows.map((row) => ({
+        session_id: row.session_id,
+        exam_name: row.exam_name ?? null,
+        quiz_title: row.quiz_title,
+        question_count: Number(row.question_count ?? 0),
+        duration_minutes: Number(row.duration_minutes ?? 0),
+        status: row.status,
+        start_time: row.start_time ?? null,
+      }));
+    } finally {
+      client.release();
+    }
+  }
+
+  async joinQuizSessionWithStudentAuth(input: {
+    studentAuthToken?: string;
+    sessionId: string;
+    deviceFingerprint?: string;
+    deviceName?: string;
+    ipAddress?: string;
+  }): Promise<{
+    sessionId: string;
+    accessSignature: string;
+    bindingId: string;
+    tokenExpiresAt: string | null;
+    examMode: ExamMode;
+    studentToken: string;
+  }> {
+    await this.authenticateStudentAuthToken(input.studentAuthToken);
+    const sessionClient = await dbPool.connect();
+    let examMode: ExamMode = "BROWSER_LOCKDOWN";
+    try {
+      const sessionResult = await sessionClient.query<{
+        status: string;
+        exam_mode: ExamMode;
+      }>(
+        `
+          SELECT status, exam_mode
+          FROM exam_sessions
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [input.sessionId]
+      );
+      if (sessionResult.rowCount === 0) {
+        throw new ApiError(404, "Exam session not found");
+      }
+      const session = sessionResult.rows[0];
+      examMode = normalizeExamMode(session.exam_mode);
+      if (!["IN_APP_QUIZ", "HYBRID"].includes(examMode)) {
+        throw new ApiError(409, "Exam session is not configured for in-app quiz");
+      }
+      if (["LOCKED", "REVOKED", "FINISHED"].includes(session.status)) {
+        throw new ApiError(409, `Session is ${session.status}`);
+      }
+    } finally {
+      sessionClient.release();
+    }
+
+    const studentToken = await this.insertStudentTokenForSession(input.sessionId);
+    const claimed = await this.claimSession({
+      token: studentToken,
+      deviceFingerprint: input.deviceFingerprint,
+      deviceName: input.deviceName,
+      ipAddress: input.ipAddress,
+      roleHint: "student",
+    });
+
+    const assignmentClient = await dbPool.connect();
+    try {
+      await assignmentClient.query("BEGIN");
+      const assignmentRequired = await this.checkQuizAssignmentRequired(
+        assignmentClient,
+        input.sessionId,
+        studentToken
+      );
+      if (assignmentRequired) {
+        await assignmentClient.query(
+          `
+            INSERT IGNORE INTO quiz_token_assignments
+              (exam_session_id, student_token, assigned_by_binding_id, assigned_at)
+            VALUES ($1, $2, $3, now())
+          `,
+          [input.sessionId, studentToken, claimed.bindingId]
+        );
+      }
+      await assignmentClient.query("COMMIT");
+    } catch (error) {
+      await assignmentClient.query("ROLLBACK");
+      throw error;
+    } finally {
+      assignmentClient.release();
+    }
+
+    return {
+      sessionId: claimed.sessionId,
+      accessSignature: claimed.accessSignature,
+      bindingId: claimed.bindingId,
+      tokenExpiresAt: claimed.tokenExpiresAt ?? null,
+      examMode: claimed.examMode,
+      studentToken,
+    };
+  }
+
+  async uploadQuizResultMarkdown(input: {
+    sessionId: string;
+    accessSignature: string;
+    fileName: string;
+    markdown: string;
+    metadata: Record<string, unknown>;
+  }): Promise<{ file_id: string; web_view_link?: string }> {
+    const client = await dbPool.connect();
+    try {
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      if (auth.role !== "student" && auth.role !== "admin") {
+        throw new ApiError(403, "Role is not allowed to upload quiz result");
+      }
+      const file = await this.uploadMarkdownToGoogleDrive(input.fileName, input.markdown, input.metadata);
+      return file;
     } finally {
       client.release();
     }
@@ -1504,10 +1848,13 @@ export class SessionService {
         const staleSeconds = Number(row.stale_seconds ?? 0);
 
         let status: "issued" | "online" | "offline" | "revoked" | "expired";
-        if (expiresAtMs !== null && nowMs >= expiresAtMs) {
-          status = "expired";
-        } else if (locked) {
+        if (locked) {
           status = "revoked";
+        } else if (toBoolean(row.claimed) && !row.binding_id && row.role === "student") {
+          // Claimed student token without an active binding is treated as revoked.
+          status = "revoked";
+        } else if (expiresAtMs !== null && nowMs >= expiresAtMs) {
+          status = "expired";
         } else if (!toBoolean(row.claimed) || !row.binding_id) {
           status = "issued";
         } else if (staleSeconds > config.heartbeatTimeoutSeconds) {
@@ -1536,6 +1883,1524 @@ export class SessionService {
         sessionState: auth.sessionStatus,
         tokens,
       };
+    } finally {
+      client.release();
+    }
+  }
+
+  async upsertQuizConfig(input: {
+    sessionId: string;
+    accessSignature: string;
+    title: string;
+    description?: string;
+    durationMinutes?: number;
+    showResultsImmediately?: boolean;
+    randomizeQuestions?: boolean;
+    allowReview?: boolean;
+  }): Promise<{
+    session_id: string;
+    exam_mode: ExamMode;
+    quiz: {
+      title: string;
+      description: string | null;
+      duration_minutes: number;
+      show_results_immediately: boolean;
+      randomize_questions: boolean;
+      allow_review: boolean;
+      published: boolean;
+    };
+  }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      this.assertAdminRole(auth);
+
+      const nextExamMode: ExamMode = auth.examMode === "BROWSER_LOCKDOWN" ? "HYBRID" : auth.examMode;
+      if (nextExamMode !== auth.examMode) {
+        await client.query(
+          `
+            UPDATE exam_sessions
+            SET exam_mode = $2
+            WHERE id = $1
+          `,
+          [input.sessionId, nextExamMode]
+        );
+      }
+
+      await client.query(
+        `
+          INSERT INTO quiz_exams
+            (exam_session_id, title, description, duration_minutes, show_results_immediately, randomize_questions, allow_review, published, created_by_binding_id, updated_by_binding_id, created_at, updated_at)
+          VALUES
+            ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $8, now(), now())
+          ON DUPLICATE KEY UPDATE
+            title = VALUES(title),
+            description = VALUES(description),
+            duration_minutes = VALUES(duration_minutes),
+            show_results_immediately = VALUES(show_results_immediately),
+            randomize_questions = VALUES(randomize_questions),
+            allow_review = VALUES(allow_review),
+            updated_by_binding_id = VALUES(updated_by_binding_id),
+            updated_at = NOW()
+        `,
+        [
+          input.sessionId,
+          input.title.trim(),
+          input.description?.trim() || null,
+          Math.max(1, input.durationMinutes ?? 60),
+          input.showResultsImmediately ?? true,
+          input.randomizeQuestions ?? false,
+          input.allowReview ?? true,
+          auth.bindingId,
+        ]
+      );
+
+      await this.logTeacherSubmission(client, input.sessionId, auth.bindingId, "QUIZ_CONFIG_UPSERT", {
+        title: input.title.trim(),
+        duration_minutes: Math.max(1, input.durationMinutes ?? 60),
+      });
+
+      const configResult = await client.query<{
+        title: string;
+        description: string | null;
+        duration_minutes: number;
+        show_results_immediately: number | boolean;
+        randomize_questions: number | boolean;
+        allow_review: number | boolean;
+        published: number | boolean;
+      }>(
+        `
+          SELECT
+            title,
+            description,
+            duration_minutes,
+            show_results_immediately,
+            randomize_questions,
+            allow_review,
+            published
+          FROM quiz_exams
+          WHERE exam_session_id = $1
+          LIMIT 1
+        `,
+        [input.sessionId]
+      );
+
+      await client.query("COMMIT");
+
+      const row = configResult.rows[0];
+      return {
+        session_id: input.sessionId,
+        exam_mode: nextExamMode,
+        quiz: {
+          title: row?.title ?? input.title.trim(),
+          description: row?.description ?? (input.description?.trim() || null),
+          duration_minutes: row?.duration_minutes ?? Math.max(1, input.durationMinutes ?? 60),
+          show_results_immediately: toBoolean(row?.show_results_immediately),
+          randomize_questions: toBoolean(row?.randomize_questions),
+          allow_review: toBoolean(row?.allow_review),
+          published: toBoolean(row?.published),
+        },
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getQuizDefinition(
+    sessionId: string,
+    accessSignature: string
+  ): Promise<{
+    session_id: string;
+    exam_mode: ExamMode;
+    quiz: {
+      title: string;
+      description: string | null;
+      duration_minutes: number;
+      show_results_immediately: boolean;
+      randomize_questions: boolean;
+      allow_review: boolean;
+      published: boolean;
+    } | null;
+    subjects: Array<{
+      id: number;
+      subject_code: string;
+      subject_name: string;
+      description: string | null;
+      ordering: number;
+      questions: Array<{
+        id: number;
+        question_text: string;
+        question_type: string;
+        points: number;
+        ordering: number;
+        options: Array<{
+          id: number;
+          key: string;
+          text: string;
+          is_correct?: boolean;
+        }>;
+      }>;
+    }>;
+    assigned_tokens: string[];
+  }> {
+    const client = await dbPool.connect();
+    try {
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      const config = await this.loadQuizConfig(client, sessionId);
+
+      const subjectRows = await client.query<{
+        id: number;
+        subject_code: string;
+        subject_name: string;
+        description: string | null;
+        ordering: number;
+      }>(
+        `
+          SELECT id, subject_code, subject_name, description, ordering
+          FROM quiz_subjects
+          WHERE exam_session_id = $1
+          ORDER BY ordering ASC, id ASC
+        `,
+        [sessionId]
+      );
+
+      const questionRows = await client.query<{
+        id: number;
+        subject_id: number;
+        question_text: string;
+        question_type: string;
+        points: number;
+        ordering: number;
+      }>(
+        `
+          SELECT id, subject_id, question_text, question_type, points, ordering
+          FROM quiz_questions
+          WHERE exam_session_id = $1
+            AND is_active = TRUE
+          ORDER BY subject_id ASC, ordering ASC, id ASC
+        `,
+        [sessionId]
+      );
+
+      const optionRows = await client.query<{
+        id: number;
+        question_id: number;
+        option_key: string;
+        option_text: string;
+        is_correct: number | boolean;
+        ordering: number;
+      }>(
+        `
+          SELECT id, question_id, option_key, option_text, is_correct, ordering
+          FROM quiz_question_options
+          WHERE question_id IN (
+            SELECT id FROM quiz_questions WHERE exam_session_id = $1 AND is_active = TRUE
+          )
+          ORDER BY question_id ASC, ordering ASC, id ASC
+        `,
+        [sessionId]
+      );
+
+      const assignedRows = await client.query<{ student_token: string }>(
+        `
+          SELECT student_token
+          FROM quiz_token_assignments
+          WHERE exam_session_id = $1
+          ORDER BY student_token ASC
+        `,
+        [sessionId]
+      );
+
+      const optionsByQuestion = new Map<number, Array<{ id: number; key: string; text: string; is_correct?: boolean }>>();
+      for (const option of optionRows.rows) {
+        const optionList = optionsByQuestion.get(option.question_id) ?? [];
+        optionList.push({
+          id: option.id,
+          key: option.option_key,
+          text: option.option_text,
+          ...(auth.role === "admin" ? { is_correct: toBoolean(option.is_correct) } : {}),
+        });
+        optionsByQuestion.set(option.question_id, optionList);
+      }
+
+      const questionsBySubject = new Map<
+        number,
+        Array<{
+          id: number;
+          question_text: string;
+          question_type: string;
+          points: number;
+          ordering: number;
+          options: Array<{ id: number; key: string; text: string; is_correct?: boolean }>;
+        }>
+      >();
+      for (const question of questionRows.rows) {
+        const questionList = questionsBySubject.get(question.subject_id) ?? [];
+        questionList.push({
+          id: question.id,
+          question_text: question.question_text,
+          question_type: question.question_type,
+          points: question.points,
+          ordering: question.ordering,
+          options: optionsByQuestion.get(question.id) ?? [],
+        });
+        questionsBySubject.set(question.subject_id, questionList);
+      }
+
+      return {
+        session_id: sessionId,
+        exam_mode: auth.examMode,
+        quiz: config
+          ? {
+              title: config.title,
+              description: config.description,
+              duration_minutes: config.duration_minutes,
+              show_results_immediately: toBoolean(config.show_results_immediately),
+              randomize_questions: toBoolean(config.randomize_questions),
+              allow_review: toBoolean(config.allow_review),
+              published: toBoolean(config.published),
+            }
+          : null,
+        subjects: subjectRows.rows.map((subject) => ({
+          id: subject.id,
+          subject_code: subject.subject_code,
+          subject_name: subject.subject_name,
+          description: subject.description,
+          ordering: subject.ordering,
+          questions: questionsBySubject.get(subject.id) ?? [],
+        })),
+        assigned_tokens: assignedRows.rows.map((row) => row.student_token),
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async addQuizSubject(input: {
+    sessionId: string;
+    accessSignature: string;
+    subjectCode: string;
+    subjectName: string;
+    description?: string;
+    ordering?: number;
+  }): Promise<{ id: number; subject_code: string; subject_name: string; ordering: number }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      this.assertAdminRole(auth);
+      this.assertQuizModeEnabled(auth.examMode);
+      await this.ensureQuizConfigExists(client, input.sessionId, auth.bindingId);
+
+      await client.query(
+        `
+          INSERT INTO quiz_subjects (exam_session_id, subject_code, subject_name, description, ordering, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, now(), now())
+          ON DUPLICATE KEY UPDATE
+            subject_name = VALUES(subject_name),
+            description = VALUES(description),
+            ordering = VALUES(ordering),
+            updated_at = NOW()
+        `,
+        [
+          input.sessionId,
+          input.subjectCode.trim().toUpperCase(),
+          input.subjectName.trim(),
+          input.description?.trim() || null,
+          input.ordering ?? 1,
+        ]
+      );
+
+      const rowResult = await client.query<{
+        id: number;
+        subject_code: string;
+        subject_name: string;
+        ordering: number;
+      }>(
+        `
+          SELECT id, subject_code, subject_name, ordering
+          FROM quiz_subjects
+          WHERE exam_session_id = $1
+            AND subject_code = $2
+          LIMIT 1
+        `,
+        [input.sessionId, input.subjectCode.trim().toUpperCase()]
+      );
+
+      await this.logTeacherSubmission(client, input.sessionId, auth.bindingId, "QUIZ_SUBJECT_UPSERT", {
+        subject_code: input.subjectCode.trim().toUpperCase(),
+        subject_name: input.subjectName.trim(),
+      });
+
+      await client.query("COMMIT");
+
+      const row = rowResult.rows[0];
+      return {
+        id: row.id,
+        subject_code: row.subject_code,
+        subject_name: row.subject_name,
+        ordering: row.ordering,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deleteQuizSubject(input: {
+    sessionId: string;
+    accessSignature: string;
+    subjectId: number;
+  }): Promise<{
+    session_id: string;
+    subject_id: number;
+    deleted: boolean;
+    remaining_subject_count: number;
+    remaining_question_count: number;
+    assigned_tokens: string[];
+  }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      this.assertAdminRole(auth);
+      this.assertQuizModeEnabled(auth.examMode);
+
+      const subjectResult = await client.query<{
+        id: number;
+        subject_code: string;
+        subject_name: string;
+      }>(
+        `
+          SELECT id, subject_code, subject_name
+          FROM quiz_subjects
+          WHERE exam_session_id = $1
+            AND id = $2
+          LIMIT 1
+        `,
+        [input.sessionId, input.subjectId]
+      );
+      if (subjectResult.rowCount === 0) {
+        throw new ApiError(404, "Quiz subject not found in this session");
+      }
+
+      await client.query(
+        `
+          DELETE FROM quiz_subjects
+          WHERE exam_session_id = $1
+            AND id = $2
+        `,
+        [input.sessionId, input.subjectId]
+      );
+
+      const remainingSubjectCountResult = await client.query<{ total: number }>(
+        `
+          SELECT COUNT(*) AS total
+          FROM quiz_subjects
+          WHERE exam_session_id = $1
+        `,
+        [input.sessionId]
+      );
+      const remainingQuestionCountResult = await client.query<{ total: number }>(
+        `
+          SELECT COUNT(*) AS total
+          FROM quiz_questions
+          WHERE exam_session_id = $1
+            AND is_active = TRUE
+        `,
+        [input.sessionId]
+      );
+
+      const remainingQuestionCount = Number(remainingQuestionCountResult.rows[0]?.total ?? 0);
+      if (remainingQuestionCount <= 0) {
+        await client.query(
+          `
+            DELETE FROM quiz_token_assignments
+            WHERE exam_session_id = $1
+          `,
+          [input.sessionId]
+        );
+      }
+
+      const assignedRows = await client.query<{ student_token: string }>(
+        `
+          SELECT student_token
+          FROM quiz_token_assignments
+          WHERE exam_session_id = $1
+          ORDER BY student_token ASC
+        `,
+        [input.sessionId]
+      );
+
+      const subjectRow = subjectResult.rows[0];
+      await this.logTeacherSubmission(client, input.sessionId, auth.bindingId, "QUIZ_SUBJECT_DELETE", {
+        subject_id: subjectRow.id,
+        subject_code: subjectRow.subject_code,
+        subject_name: subjectRow.subject_name,
+      });
+
+      await client.query("COMMIT");
+      return {
+        session_id: input.sessionId,
+        subject_id: input.subjectId,
+        deleted: true,
+        remaining_subject_count: Number(remainingSubjectCountResult.rows[0]?.total ?? 0),
+        remaining_question_count: remainingQuestionCount,
+        assigned_tokens: assignedRows.rows.map((row) => row.student_token),
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async addQuizQuestion(input: {
+    sessionId: string;
+    accessSignature: string;
+    subjectId: number;
+    questionText: string;
+    questionType?: "single_choice" | "multi_choice" | "multiple_correct" | "true_false" | "matching";
+    points?: number;
+    ordering?: number;
+    options: QuizOptionUpsertInput[];
+  }): Promise<{ question_id: number; subject_id: number; options_count: number }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      this.assertAdminRole(auth);
+      this.assertQuizModeEnabled(auth.examMode);
+      await this.ensureQuizConfigExists(client, input.sessionId, auth.bindingId);
+      await this.assertQuizQuestionCapacity(client, input.sessionId, 1);
+
+      await this.assertSubjectBelongsToSession(client, input.sessionId, input.subjectId);
+
+      const questionId = await this.insertQuizQuestionWithOptions(client, input.sessionId, auth.bindingId, {
+        subjectId: input.subjectId,
+        questionText: input.questionText,
+        questionType: input.questionType,
+        points: input.points,
+        ordering: input.ordering,
+        options: input.options,
+      });
+
+      await this.logTeacherSubmission(client, input.sessionId, auth.bindingId, "QUIZ_QUESTION_CREATE", {
+        question_id: questionId,
+        subject_id: input.subjectId,
+      });
+
+      await client.query("COMMIT");
+      return {
+        question_id: questionId,
+        subject_id: input.subjectId,
+        options_count: input.options.length,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async addQuizQuestionsBulk(input: {
+    sessionId: string;
+    accessSignature: string;
+    questions: QuizQuestionUpsertInput[];
+  }): Promise<{ inserted: number; subject_ids: number[] }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      this.assertAdminRole(auth);
+      this.assertQuizModeEnabled(auth.examMode);
+      await this.ensureQuizConfigExists(client, input.sessionId, auth.bindingId);
+      await this.assertQuizQuestionCapacity(client, input.sessionId, input.questions.length);
+
+      const touchedSubjectIds = new Set<number>();
+      for (const question of input.questions) {
+        await this.assertSubjectBelongsToSession(client, input.sessionId, question.subjectId);
+        await this.insertQuizQuestionWithOptions(client, input.sessionId, auth.bindingId, question);
+        touchedSubjectIds.add(question.subjectId);
+      }
+
+      await this.logTeacherSubmission(client, input.sessionId, auth.bindingId, "QUIZ_QUESTION_BULK_CREATE", {
+        inserted: input.questions.length,
+      });
+
+      await client.query("COMMIT");
+      return {
+        inserted: input.questions.length,
+        subject_ids: Array.from(touchedSubjectIds),
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async setQuizPublished(
+    sessionId: string,
+    accessSignature: string,
+    published: boolean
+  ): Promise<{ session_id: string; published: boolean; total_questions: number }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      this.assertAdminRole(auth);
+      this.assertQuizModeEnabled(auth.examMode);
+      await this.ensureQuizConfigExists(client, sessionId, auth.bindingId);
+
+      const questionCountResult = await client.query<{ total: number }>(
+        `
+          SELECT COUNT(*) AS total
+          FROM quiz_questions
+          WHERE exam_session_id = $1
+            AND is_active = TRUE
+        `,
+        [sessionId]
+      );
+      const totalQuestions = Number(questionCountResult.rows[0]?.total ?? 0);
+      if (published && totalQuestions === 0) {
+        throw new ApiError(400, "Quiz must have at least one active question before publishing");
+      }
+
+      await client.query(
+        `
+          UPDATE quiz_exams
+          SET published = $2,
+              updated_by_binding_id = $3,
+              updated_at = NOW()
+          WHERE exam_session_id = $1
+        `,
+        [sessionId, published, auth.bindingId]
+      );
+
+      await this.logTeacherSubmission(client, sessionId, auth.bindingId, "QUIZ_PUBLISH_UPDATE", {
+        published,
+        total_questions: totalQuestions,
+      });
+
+      await client.query("COMMIT");
+      return {
+        session_id: sessionId,
+        published,
+        total_questions: totalQuestions,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async startQuizAttempt(input: {
+    sessionId: string;
+    accessSignature: string;
+    studentName?: string;
+    studentClass?: string;
+    studentElective?: string;
+  }): Promise<{
+    attempt_id: number;
+    session_id: string;
+    exam_mode: ExamMode;
+    status: string;
+    started_at: string;
+    student_profile: {
+      student_name: string | null;
+      student_class: string | null;
+      student_elective: string | null;
+    };
+    quiz: {
+      title: string;
+      description: string | null;
+      duration_minutes: number;
+      show_results_immediately: boolean;
+      randomize_questions: boolean;
+      allow_review: boolean;
+      published: boolean;
+    };
+    questions: Array<{
+      id: number;
+      subject_id: number;
+      question_text: string;
+      question_type: string;
+      points: number;
+      ordering: number;
+      options: Array<{ id: number; key: string; text: string }>;
+    }>;
+    existing_answers: Array<{
+      question_id: number;
+      selected_option_ids: number[];
+      text_answer: string | null;
+      is_correct: boolean;
+      points_awarded: number;
+    }>;
+  }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      if (auth.role !== "student" && auth.role !== "admin") {
+        throw new ApiError(403, "Role is not allowed to start quiz attempt");
+      }
+      this.assertQuizModeEnabled(auth.examMode);
+
+      const config = await this.loadQuizConfig(client, input.sessionId);
+      if (!config) {
+        throw new ApiError(404, "Quiz config not found for session");
+      }
+      if (!toBoolean(config.published) && auth.role === "student") {
+        throw new ApiError(409, "Quiz is not published yet");
+      }
+
+      let studentToken: string | null = null;
+      if (auth.role === "student") {
+        studentToken = await this.resolveStudentTokenForBinding(client, input.sessionId, auth.bindingId);
+        const assignmentRequired = await this.checkQuizAssignmentRequired(
+          client,
+          input.sessionId,
+          studentToken
+        );
+        if (assignmentRequired) {
+          throw new ApiError(403, "Quiz has not been assigned to this student token yet");
+        }
+      }
+
+      await client.query(
+        `
+          INSERT INTO quiz_student_attempts
+            (exam_session_id, student_binding_id, student_name, student_class, student_elective, started_at, status, score, max_score, duration_seconds)
+          VALUES
+            ($1, $2, $3, $4, $5, now(), 'STARTED', 0, 0, 0)
+          ON DUPLICATE KEY UPDATE
+            status = IF(status = 'SUBMITTED', status, 'STARTED'),
+            student_name = COALESCE(NULLIF(TRIM($3), ''), student_name),
+            student_class = COALESCE(NULLIF(TRIM($4), ''), student_class),
+            student_elective = COALESCE(NULLIF(TRIM($5), ''), student_elective)
+        `,
+        [
+          input.sessionId,
+          auth.bindingId,
+          input.studentName?.trim() || null,
+          input.studentClass?.trim() || null,
+          input.studentElective?.trim() || null,
+        ]
+      );
+
+      const attemptResult = await client.query<{
+        id: number;
+        status: string;
+        started_at: Date | string;
+        student_name: string | null;
+        student_class: string | null;
+        student_elective: string | null;
+      }>(
+        `
+          SELECT id, status, started_at, student_name, student_class, student_elective
+          FROM quiz_student_attempts
+          WHERE exam_session_id = $1
+            AND student_binding_id = $2
+          LIMIT 1
+        `,
+        [input.sessionId, auth.bindingId]
+      );
+      const attempt = attemptResult.rows[0];
+
+      const questionRows = await client.query<{
+        id: number;
+        subject_id: number;
+        question_text: string;
+        question_type: string;
+        points: number;
+        ordering: number;
+      }>(
+        `
+          SELECT id, subject_id, question_text, question_type, points, ordering
+          FROM quiz_questions
+          WHERE exam_session_id = $1
+            AND is_active = TRUE
+          ORDER BY ordering ASC, id ASC
+        `, 
+        [input.sessionId]
+      );
+
+      const optionRows = await client.query<{
+        id: number;
+        question_id: number;
+        option_key: string;
+        option_text: string;
+        ordering: number;
+      }>(
+        `
+          SELECT id, question_id, option_key, option_text, ordering
+          FROM quiz_question_options
+          WHERE question_id IN (
+            SELECT id FROM quiz_questions WHERE exam_session_id = $1 AND is_active = TRUE
+          )
+          ORDER BY question_id ASC, ordering ASC, id ASC
+        `,
+        [input.sessionId]
+      );
+
+      const answerRows = await client.query<{
+        question_id: number;
+        selected_option_ids: string | null;
+        text_answer: string | null;
+        is_correct: number | boolean;
+        points_awarded: string | number;
+      }>(
+        `
+          SELECT question_id, selected_option_ids, text_answer, is_correct, points_awarded
+          FROM quiz_student_answers
+          WHERE attempt_id = $1
+          ORDER BY question_id ASC
+        `,
+        [attempt.id]
+      );
+
+      await client.query("COMMIT");
+
+      const optionsByQuestion = new Map<number, Array<{ id: number; key: string; text: string }>>();
+      for (const option of optionRows.rows) {
+        const list = optionsByQuestion.get(option.question_id) ?? [];
+        list.push({
+          id: option.id,
+          key: option.option_key,
+          text: option.option_text,
+        });
+        optionsByQuestion.set(option.question_id, list);
+      }
+
+      const questions = questionRows.rows.map((question) => ({
+        id: question.id,
+        subject_id: question.subject_id,
+        question_text: question.question_text,
+        question_type: question.question_type,
+        points: question.points,
+        ordering: question.ordering,
+        options: optionsByQuestion.get(question.id) ?? [],
+      }));
+
+      if (toBoolean(config.randomize_questions)) {
+        shuffleInPlace(questions);
+      }
+
+      return {
+        attempt_id: attempt.id,
+        session_id: input.sessionId,
+        exam_mode: auth.examMode,
+        status: attempt.status,
+        started_at: dayjs(attempt.started_at).toISOString(),
+        student_profile: {
+          student_name: attempt.student_name ?? null,
+          student_class: attempt.student_class ?? null,
+          student_elective: attempt.student_elective ?? null,
+        },
+        quiz: {
+          title: config.title,
+          description: config.description,
+          duration_minutes: config.duration_minutes,
+          show_results_immediately: toBoolean(config.show_results_immediately),
+          randomize_questions: toBoolean(config.randomize_questions),
+          allow_review: toBoolean(config.allow_review),
+          published: toBoolean(config.published),
+        },
+        questions,
+        existing_answers: answerRows.rows.map((answer) => ({
+          question_id: answer.question_id,
+          selected_option_ids: parseJsonNumberArray(answer.selected_option_ids),
+          text_answer: answer.text_answer,
+          is_correct: toBoolean(answer.is_correct),
+          points_awarded: Number(answer.points_awarded ?? 0),
+        })),
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async submitQuizAnswer(input: {
+    sessionId: string;
+    accessSignature: string;
+    questionId: number;
+    selectedOptionIds?: number[];
+    textAnswer?: string;
+  }): Promise<{
+    ok: boolean;
+    question_id: number;
+    is_correct: boolean;
+    points_awarded: number;
+  }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      this.assertQuizModeEnabled(auth.examMode);
+      if (auth.role !== "student" && auth.role !== "admin") {
+        throw new ApiError(403, "Role is not allowed to answer quiz questions");
+      }
+
+      const attemptResult = await client.query<{
+        id: number;
+        status: string;
+      }>(
+        `
+          SELECT id, status
+          FROM quiz_student_attempts
+          WHERE exam_session_id = $1
+            AND student_binding_id = $2
+          LIMIT 1
+        `,
+        [input.sessionId, auth.bindingId]
+      );
+      if (attemptResult.rowCount === 0) {
+        throw new ApiError(404, "Quiz attempt not found. Call /quiz/start first.");
+      }
+      const attempt = attemptResult.rows[0];
+      if (attempt.status === "SUBMITTED") {
+        throw new ApiError(409, "Quiz attempt has already been submitted");
+      }
+
+      const questionResult = await client.query<{
+        id: number;
+        question_type: string;
+        points: number;
+      }>(
+        `
+          SELECT id, question_type, points
+          FROM quiz_questions
+          WHERE id = $1
+            AND exam_session_id = $2
+            AND is_active = TRUE
+          LIMIT 1
+        `,
+        [input.questionId, input.sessionId]
+      );
+      if (questionResult.rowCount === 0) {
+        throw new ApiError(404, "Question not found in this session");
+      }
+      const question = questionResult.rows[0];
+
+      const optionRows = await client.query<{
+        id: number;
+        is_correct: number | boolean;
+      }>(
+        `
+          SELECT id, is_correct
+          FROM quiz_question_options
+          WHERE question_id = $1
+          ORDER BY id ASC
+        `,
+        [input.questionId]
+      );
+
+      const selectedOptionIds = Array.from(new Set(input.selectedOptionIds ?? [])).sort((a, b) => a - b);
+      const correctOptionIds = optionRows.rows
+        .filter((option) => toBoolean(option.is_correct))
+        .map((option) => option.id)
+        .sort((a, b) => a - b);
+
+      const normalizedQuestionType = String(question.question_type || "single_choice").toLowerCase();
+      let isCorrect = false;
+      if (
+        normalizedQuestionType === "multi_choice" ||
+        normalizedQuestionType === "multiple_correct" ||
+        normalizedQuestionType === "matching"
+      ) {
+        isCorrect = selectedOptionIds.length > 0 && arraysEqual(selectedOptionIds, correctOptionIds);
+      } else {
+        isCorrect =
+          selectedOptionIds.length === 1 &&
+          correctOptionIds.length === 1 &&
+          selectedOptionIds[0] === correctOptionIds[0];
+      }
+
+      const pointsAwarded = isCorrect ? Number(question.points ?? 0) : 0;
+
+      await client.query(
+        `
+          INSERT INTO quiz_student_answers
+            (attempt_id, question_id, selected_option_ids, text_answer, is_correct, points_awarded, answered_at)
+          VALUES
+            ($1, $2, $3, $4, $5, $6, now())
+          ON DUPLICATE KEY UPDATE
+            selected_option_ids = VALUES(selected_option_ids),
+            text_answer = VALUES(text_answer),
+            is_correct = VALUES(is_correct),
+            points_awarded = VALUES(points_awarded),
+            answered_at = NOW()
+        `,
+        [
+          attempt.id,
+          input.questionId,
+          JSON.stringify(selectedOptionIds),
+          input.textAnswer?.trim() || null,
+          isCorrect,
+          pointsAwarded,
+        ]
+      );
+
+      await client.query("COMMIT");
+      return {
+        ok: true,
+        question_id: input.questionId,
+        is_correct: isCorrect,
+        points_awarded: pointsAwarded,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async finishQuizAttempt(
+    sessionId: string,
+    accessSignature: string
+  ): Promise<{
+    ok: boolean;
+    attempt_id: number;
+    status: string;
+    submitted_at: string;
+    score: number;
+    max_score: number;
+    duration_seconds: number;
+    show_results_immediately: boolean;
+    result_items: Array<{
+      question_id: number;
+      question_text: string;
+      points_awarded: number;
+      max_points: number;
+      is_correct: boolean;
+    }>;
+  }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      this.assertQuizModeEnabled(auth.examMode);
+      if (auth.role !== "student" && auth.role !== "admin") {
+        throw new ApiError(403, "Role is not allowed to finish quiz attempt");
+      }
+
+      const config = await this.loadQuizConfig(client, sessionId);
+      if (!config) {
+        throw new ApiError(404, "Quiz config not found for session");
+      }
+
+      const attemptResult = await client.query<{
+        id: number;
+        started_at: Date | string;
+        status: string;
+      }>(
+        `
+          SELECT id, started_at, status
+          FROM quiz_student_attempts
+          WHERE exam_session_id = $1
+            AND student_binding_id = $2
+          LIMIT 1
+        `,
+        [sessionId, auth.bindingId]
+      );
+      if (attemptResult.rowCount === 0) {
+        throw new ApiError(404, "Quiz attempt not found. Call /quiz/start first.");
+      }
+      const attempt = attemptResult.rows[0];
+
+      const scoreResult = await client.query<{
+        score: string | number;
+        max_score: string | number;
+      }>(
+        `
+          SELECT
+            COALESCE(SUM(a.points_awarded), 0) AS score,
+            COALESCE(SUM(q.points), 0) AS max_score
+          FROM quiz_questions q
+          LEFT JOIN quiz_student_answers a
+            ON a.question_id = q.id
+           AND a.attempt_id = $1
+          WHERE q.exam_session_id = $2
+            AND q.is_active = TRUE
+        `,
+        [attempt.id, sessionId]
+      );
+
+      const score = Number(scoreResult.rows[0]?.score ?? 0);
+      const maxScore = Number(scoreResult.rows[0]?.max_score ?? 0);
+      const durationSeconds = Math.max(0, Math.floor((Date.now() - new Date(attempt.started_at).getTime()) / 1000));
+
+      await client.query(
+        `
+          UPDATE quiz_student_attempts
+          SET submitted_at = now(),
+              status = 'SUBMITTED',
+              score = $2,
+              max_score = $3,
+              duration_seconds = $4
+          WHERE id = $1
+        `,
+        [attempt.id, score, maxScore, durationSeconds]
+      );
+
+      const resultItemsRows = await client.query<{
+        question_id: number;
+        question_text: string;
+        points_awarded: string | number;
+        max_points: string | number;
+        is_correct: number | boolean;
+      }>(
+        `
+          SELECT
+            q.id AS question_id,
+            q.question_text,
+            COALESCE(a.points_awarded, 0) AS points_awarded,
+            q.points AS max_points,
+            COALESCE(a.is_correct, FALSE) AS is_correct
+          FROM quiz_questions q
+          LEFT JOIN quiz_student_answers a
+            ON a.question_id = q.id
+           AND a.attempt_id = $1
+          WHERE q.exam_session_id = $2
+            AND q.is_active = TRUE
+          ORDER BY q.ordering ASC, q.id ASC
+        `,
+        [attempt.id, sessionId]
+      );
+
+      await client.query("COMMIT");
+
+      const showResultsImmediately = toBoolean(config.show_results_immediately) || auth.role === "admin";
+      return {
+        ok: true,
+        attempt_id: attempt.id,
+        status: "SUBMITTED",
+        submitted_at: dayjs().toISOString(),
+        score,
+        max_score: maxScore,
+        duration_seconds: durationSeconds,
+        show_results_immediately: showResultsImmediately,
+        result_items: showResultsImmediately
+          ? resultItemsRows.rows.map((row) => ({
+              question_id: row.question_id,
+              question_text: row.question_text,
+              points_awarded: Number(row.points_awarded ?? 0),
+              max_points: Number(row.max_points ?? 0),
+              is_correct: toBoolean(row.is_correct),
+            }))
+          : [],
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getQuizResultForCurrentBinding(
+    sessionId: string,
+    accessSignature: string
+  ): Promise<{
+    session_id: string;
+    attempt_id: number | null;
+    status: string | null;
+    score: number;
+    max_score: number;
+    submitted_at: string | null;
+    show_results_immediately: boolean;
+    result_items: Array<{
+      question_id: number;
+      question_text: string;
+      points_awarded: number;
+      max_points: number;
+      is_correct: boolean;
+    }>;
+  }> {
+    const client = await dbPool.connect();
+    try {
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      this.assertQuizModeEnabled(auth.examMode);
+
+      const config = await this.loadQuizConfig(client, sessionId);
+      if (!config) {
+        throw new ApiError(404, "Quiz config not found for session");
+      }
+
+      const attemptResult = await client.query<{
+        id: number;
+        status: string;
+        score: string | number;
+        max_score: string | number;
+        submitted_at: Date | string | null;
+      }>(
+        `
+          SELECT id, status, score, max_score, submitted_at
+          FROM quiz_student_attempts
+          WHERE exam_session_id = $1
+            AND student_binding_id = $2
+          LIMIT 1
+        `,
+        [sessionId, auth.bindingId]
+      );
+
+      if (attemptResult.rowCount === 0) {
+        return {
+          session_id: sessionId,
+          attempt_id: null,
+          status: null,
+          score: 0,
+          max_score: 0,
+          submitted_at: null,
+          show_results_immediately: toBoolean(config.show_results_immediately),
+          result_items: [],
+        };
+      }
+
+      const attempt = attemptResult.rows[0];
+      const showResultsImmediately = toBoolean(config.show_results_immediately) || auth.role === "admin";
+      if (!showResultsImmediately) {
+        return {
+          session_id: sessionId,
+          attempt_id: attempt.id,
+          status: attempt.status,
+          score: Number(attempt.score ?? 0),
+          max_score: Number(attempt.max_score ?? 0),
+          submitted_at: attempt.submitted_at ? dayjs(attempt.submitted_at).toISOString() : null,
+          show_results_immediately: false,
+          result_items: [],
+        };
+      }
+
+      const rows = await client.query<{
+        question_id: number;
+        question_text: string;
+        points_awarded: string | number;
+        max_points: string | number;
+        is_correct: number | boolean;
+      }>(
+        `
+          SELECT
+            q.id AS question_id,
+            q.question_text,
+            COALESCE(a.points_awarded, 0) AS points_awarded,
+            q.points AS max_points,
+            COALESCE(a.is_correct, FALSE) AS is_correct
+          FROM quiz_questions q
+          LEFT JOIN quiz_student_answers a
+            ON a.question_id = q.id
+           AND a.attempt_id = $1
+          WHERE q.exam_session_id = $2
+            AND q.is_active = TRUE
+          ORDER BY q.ordering ASC, q.id ASC
+        `,
+        [attempt.id, sessionId]
+      );
+
+      return {
+        session_id: sessionId,
+        attempt_id: attempt.id,
+        status: attempt.status,
+        score: Number(attempt.score ?? 0),
+        max_score: Number(attempt.max_score ?? 0),
+        submitted_at: attempt.submitted_at ? dayjs(attempt.submitted_at).toISOString() : null,
+        show_results_immediately: true,
+        result_items: rows.rows.map((row) => ({
+          question_id: row.question_id,
+          question_text: row.question_text,
+          points_awarded: Number(row.points_awarded ?? 0),
+          max_points: Number(row.max_points ?? 0),
+          is_correct: toBoolean(row.is_correct),
+        })),
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async getQuizResultsForSession(
+    sessionId: string,
+    accessSignature: string
+  ): Promise<{
+    session_id: string;
+    exam_mode: ExamMode;
+    results: Array<{
+      token: string;
+      binding_id: string;
+      device_name: string | null;
+      status: string;
+      score: number;
+      max_score: number;
+      submitted_at: string | null;
+      duration_seconds: number;
+      student_name: string | null;
+      student_class: string | null;
+      student_elective: string | null;
+    }>;
+  }> {
+    const client = await dbPool.connect();
+    try {
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      this.assertAdminRole(auth);
+      this.assertQuizModeEnabled(auth.examMode);
+
+      const rows = await client.query<{
+        token: string;
+        binding_id: string;
+        device_name: string | null;
+        status: string;
+        score: string | number;
+        max_score: string | number;
+        submitted_at: Date | string | null;
+        duration_seconds: number;
+        student_name: string | null;
+        student_class: string | null;
+        student_elective: string | null;
+      }>(
+        `
+          SELECT
+            st.token,
+            qa.student_binding_id AS binding_id,
+            db.device_name,
+            qa.status,
+            qa.score,
+            qa.max_score,
+            qa.submitted_at,
+            qa.duration_seconds,
+            qa.student_name,
+            qa.student_class,
+            qa.student_elective
+          FROM quiz_student_attempts qa
+          JOIN device_bindings db ON db.id = qa.student_binding_id
+          JOIN session_tokens st ON st.token = db.token
+          WHERE qa.exam_session_id = $1
+            AND st.role = 'student'
+          ORDER BY qa.submitted_at DESC, qa.id DESC
+        `,
+        [sessionId]
+      );
+
+      return {
+        session_id: sessionId,
+        exam_mode: auth.examMode,
+        results: rows.rows.map((row) => ({
+          token: row.token,
+          binding_id: row.binding_id,
+          device_name: row.device_name,
+          status: row.status,
+          score: Number(row.score ?? 0),
+          max_score: Number(row.max_score ?? 0),
+          submitted_at: row.submitted_at ? dayjs(row.submitted_at).toISOString() : null,
+          duration_seconds: Number(row.duration_seconds ?? 0),
+          student_name: row.student_name ?? null,
+          student_class: row.student_class ?? null,
+          student_elective: row.student_elective ?? null,
+        })),
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async assignQuizToStudentToken(input: {
+    sessionId: string;
+    accessSignature: string;
+    studentToken: string;
+    assigned: boolean;
+  }): Promise<{
+    session_id: string;
+    student_token: string;
+    assigned: boolean;
+    assigned_tokens: string[];
+  }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      this.assertAdminRole(auth);
+      this.assertQuizModeEnabled(auth.examMode);
+      const config = await this.loadQuizConfig(client, input.sessionId);
+      if (!config) {
+        throw new ApiError(409, "Create quiz config first before assigning tokens");
+      }
+      const questionCountResult = await client.query<{ total: number }>(
+        `
+          SELECT COUNT(*) AS total
+          FROM quiz_questions
+          WHERE exam_session_id = $1
+            AND is_active = TRUE
+        `,
+        [input.sessionId]
+      );
+      const questionCount = Number(questionCountResult.rows[0]?.total ?? 0);
+      if (questionCount <= 0) {
+        throw new ApiError(409, "Add at least one active quiz question before assigning tokens");
+      }
+      const normalizedStudentToken = await this.ensureStudentTokenBelongsToSession(
+        client,
+        input.sessionId,
+        input.studentToken
+      );
+
+      if (input.assigned) {
+        await client.query(
+          `
+            INSERT INTO quiz_token_assignments
+              (exam_session_id, student_token, assigned_by_binding_id, assigned_at)
+            VALUES ($1, $2, $3, now())
+            ON DUPLICATE KEY UPDATE
+              assigned_by_binding_id = VALUES(assigned_by_binding_id),
+              assigned_at = NOW()
+          `,
+          [input.sessionId, normalizedStudentToken, auth.bindingId]
+        );
+      } else {
+        await client.query(
+          `
+            DELETE FROM quiz_token_assignments
+            WHERE exam_session_id = $1
+              AND student_token = $2
+          `,
+          [input.sessionId, normalizedStudentToken]
+        );
+      }
+
+      const assignedRows = await client.query<{ student_token: string }>(
+        `
+          SELECT student_token
+          FROM quiz_token_assignments
+          WHERE exam_session_id = $1
+          ORDER BY student_token ASC
+        `,
+        [input.sessionId]
+      );
+
+      await this.logTeacherSubmission(client, input.sessionId, auth.bindingId, "QUIZ_ASSIGN_TOKEN", {
+        student_token: normalizedStudentToken,
+        assigned: input.assigned,
+      });
+
+      await client.query("COMMIT");
+      return {
+        session_id: input.sessionId,
+        student_token: normalizedStudentToken,
+        assigned: input.assigned,
+        assigned_tokens: assignedRows.rows.map((row) => row.student_token),
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async assignQuizToAllActiveStudentTokens(input: {
+    sessionId: string;
+    accessSignature: string;
+  }): Promise<{
+    session_id: string;
+    assigned_count: number;
+    assigned_tokens: string[];
+  }> {
+    const client = await dbPool.connect();
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
+      this.assertAdminRole(auth);
+      this.assertQuizModeEnabled(auth.examMode);
+      const config = await this.loadQuizConfig(client, input.sessionId);
+      if (!config) {
+        throw new ApiError(409, "Create quiz config first before assigning tokens");
+      }
+      const questionCountResult = await client.query<{ total: number }>(
+        `
+          SELECT COUNT(*) AS total
+          FROM quiz_questions
+          WHERE exam_session_id = $1
+            AND is_active = TRUE
+        `,
+        [input.sessionId]
+      );
+      const questionCount = Number(questionCountResult.rows[0]?.total ?? 0);
+      if (questionCount <= 0) {
+        throw new ApiError(409, "Add at least one active quiz question before assigning tokens");
+      }
+
+      const activeStudentTokensResult = await client.query<{ token: string }>(
+        `
+          SELECT token
+          FROM session_tokens
+          WHERE exam_session_id = $1
+            AND role = 'student'
+            AND (expires_at IS NULL OR expires_at > NOW())
+          ORDER BY token ASC
+        `,
+        [input.sessionId]
+      );
+      if (activeStudentTokensResult.rowCount === 0) {
+        throw new ApiError(404, "No active student tokens found in this session");
+      }
+
+      await client.query(
+        `
+          INSERT INTO quiz_token_assignments
+            (exam_session_id, student_token, assigned_by_binding_id, assigned_at)
+          SELECT
+            $1,
+            st.token,
+            $2,
+            NOW()
+          FROM session_tokens st
+          WHERE st.exam_session_id = $1
+            AND st.role = 'student'
+            AND (st.expires_at IS NULL OR st.expires_at > NOW())
+          ON DUPLICATE KEY UPDATE
+            assigned_by_binding_id = VALUES(assigned_by_binding_id),
+            assigned_at = NOW()
+        `,
+        [input.sessionId, auth.bindingId]
+      );
+
+      const assignedRows = await client.query<{ student_token: string }>(
+        `
+          SELECT student_token
+          FROM quiz_token_assignments
+          WHERE exam_session_id = $1
+          ORDER BY student_token ASC
+        `,
+        [input.sessionId]
+      );
+
+      await this.logTeacherSubmission(client, input.sessionId, auth.bindingId, "QUIZ_ASSIGN_ALL_ACTIVE_TOKENS", {
+        assigned_count: activeStudentTokensResult.rows.length,
+      });
+
+      await client.query("COMMIT");
+      return {
+        session_id: input.sessionId,
+        assigned_count: activeStudentTokensResult.rows.length,
+        assigned_tokens: assignedRows.rows.map((row) => row.student_token),
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
     } finally {
       client.release();
     }
@@ -1808,6 +3673,7 @@ export class SessionService {
       risk_score: number;
       locked: number | boolean;
       session_status: SessionState;
+      exam_mode: ExamMode | string | null;
       signature_version: number;
     }>(
       `
@@ -1818,6 +3684,7 @@ export class SessionService {
           db.risk_score,
           db.locked,
           es.status AS session_status,
+          es.exam_mode,
           db.signature_version
         FROM device_bindings db
         JOIN session_tokens st ON st.token = db.token
@@ -1848,6 +3715,7 @@ export class SessionService {
       riskScore: row.risk_score,
       locked: toBoolean(row.locked),
       sessionStatus: row.session_status,
+      examMode: normalizeExamMode(row.exam_mode),
       signatureVersion: row.signature_version,
       exp: payload.exp,
     };
@@ -1864,6 +3732,319 @@ export class SessionService {
     } catch {
       return null;
     }
+  }
+
+  private assertAdminRole(auth: BindingAuthContext): void {
+    if (auth.role === "student") {
+      throw new ApiError(403, "Student role is not authorized for this action");
+    }
+  }
+
+  private assertQuizModeEnabled(examMode: ExamMode): void {
+    if (examMode === "BROWSER_LOCKDOWN") {
+      throw new ApiError(409, "This session is in browser-only mode. Create HYBRID or IN_APP_QUIZ session.");
+    }
+  }
+
+  private async loadQuizConfig(
+    client: DbClient,
+    sessionId: string
+  ): Promise<{
+    title: string;
+    description: string | null;
+    duration_minutes: number;
+    show_results_immediately: number | boolean;
+    randomize_questions: number | boolean;
+    allow_review: number | boolean;
+    published: number | boolean;
+  } | null> {
+    const config = await client.query<{
+      title: string;
+      description: string | null;
+      duration_minutes: number;
+      show_results_immediately: number | boolean;
+      randomize_questions: number | boolean;
+      allow_review: number | boolean;
+      published: number | boolean;
+    }>(
+      `
+        SELECT
+          title,
+          description,
+          duration_minutes,
+          show_results_immediately,
+          randomize_questions,
+          allow_review,
+          published
+        FROM quiz_exams
+        WHERE exam_session_id = $1
+        LIMIT 1
+      `,
+      [sessionId]
+    );
+
+    if (config.rowCount === 0) {
+      return null;
+    }
+    return config.rows[0];
+  }
+
+  private async ensureQuizConfigExists(
+    client: DbClient,
+    sessionId: string,
+    actorBindingId: string
+  ): Promise<void> {
+    const existing = await this.loadQuizConfig(client, sessionId);
+    if (existing) {
+      return;
+    }
+
+    await client.query(
+      `
+        INSERT INTO quiz_exams
+          (exam_session_id, title, description, duration_minutes, show_results_immediately, randomize_questions, allow_review, published, created_by_binding_id, updated_by_binding_id, created_at, updated_at)
+        VALUES
+          ($1, 'Edufika Quiz', NULL, 60, TRUE, FALSE, TRUE, FALSE, $2, $2, now(), now())
+      `,
+      [sessionId, actorBindingId]
+    );
+  }
+
+  private async assertSubjectBelongsToSession(client: DbClient, sessionId: string, subjectId: number): Promise<void> {
+    const subject = await client.query<{ id: number }>(
+      `
+        SELECT id
+        FROM quiz_subjects
+        WHERE id = $1
+          AND exam_session_id = $2
+        LIMIT 1
+      `,
+      [subjectId, sessionId]
+    );
+    if (subject.rowCount === 0) {
+      throw new ApiError(404, "Subject not found in this session");
+    }
+  }
+
+  private async assertQuizQuestionCapacity(
+    client: DbClient,
+    sessionId: string,
+    incomingCount: number
+  ): Promise<void> {
+    const countResult = await client.query<{ total: number }>(
+      `
+        SELECT COUNT(*) AS total
+        FROM quiz_questions
+        WHERE exam_session_id = $1
+          AND is_active = TRUE
+      `,
+      [sessionId]
+    );
+    const currentTotal = Number(countResult.rows[0]?.total ?? 0);
+    if (currentTotal + Math.max(0, incomingCount) > MAX_QUIZ_QUESTIONS_PER_SESSION) {
+      throw new ApiError(
+        400,
+        `Quiz question limit exceeded. Maximum ${MAX_QUIZ_QUESTIONS_PER_SESSION} active questions per session`
+      );
+    }
+  }
+
+  private async ensureStudentTokenBelongsToSession(
+    client: DbClient,
+    sessionId: string,
+    studentTokenRaw: string
+  ): Promise<string> {
+    const studentToken = studentTokenRaw.trim().toUpperCase();
+    if (!studentToken) {
+      throw new ApiError(400, "Student token is required");
+    }
+    const row = await client.query<{ token: string }>(
+      `
+        SELECT token
+        FROM session_tokens
+        WHERE exam_session_id = $1
+          AND token = $2
+          AND role = 'student'
+        LIMIT 1
+      `,
+      [sessionId, studentToken]
+    );
+    if (row.rowCount === 0) {
+      throw new ApiError(404, "Student token not found in this session");
+    }
+    return row.rows[0].token;
+  }
+
+  private async resolveStudentTokenForBinding(
+    client: DbClient,
+    sessionId: string,
+    bindingId: string
+  ): Promise<string> {
+    const row = await client.query<{ token: string }>(
+      `
+        SELECT st.token
+        FROM device_bindings db
+        JOIN session_tokens st ON st.token = db.token
+        WHERE db.id = $1
+          AND st.exam_session_id = $2
+          AND st.role = 'student'
+        LIMIT 1
+      `,
+      [bindingId, sessionId]
+    );
+    if (row.rowCount === 0) {
+      throw new ApiError(403, "Student token binding not found for quiz attempt");
+    }
+    return row.rows[0].token;
+  }
+
+  private async checkQuizAssignmentRequired(
+    client: DbClient,
+    sessionId: string,
+    studentToken: string
+  ): Promise<boolean> {
+    const totalAssignmentsResult = await client.query<{ total: number }>(
+      `
+        SELECT COUNT(*) AS total
+        FROM quiz_token_assignments
+        WHERE exam_session_id = $1
+      `,
+      [sessionId]
+    );
+    const totalAssignments = Number(totalAssignmentsResult.rows[0]?.total ?? 0);
+    if (totalAssignments === 0) {
+      return false;
+    }
+    const assignedResult = await client.query<{ total: number }>(
+      `
+        SELECT COUNT(*) AS total
+        FROM quiz_token_assignments
+        WHERE exam_session_id = $1
+          AND student_token = $2
+      `,
+      [sessionId, studentToken]
+    );
+    const tokenAssigned = Number(assignedResult.rows[0]?.total ?? 0) > 0;
+    return !tokenAssigned;
+  }
+
+  private async insertQuizQuestionWithOptions(
+    client: DbClient,
+    sessionId: string,
+    actorBindingId: string,
+    input: QuizQuestionUpsertInput
+  ): Promise<number> {
+    const rawType = String(input.questionType ?? "single_choice").toLowerCase();
+    const normalizedType =
+      rawType === "multi_choice" ||
+      rawType === "multiple_correct" ||
+      rawType === "true_false" ||
+      rawType === "matching"
+        ? rawType
+        : "single_choice";
+
+    const normalizedOptions =
+      normalizedType === "true_false"
+        ? (() => {
+            const providedTrue = input.options.find((option) => {
+              const key = option.key.trim().toUpperCase();
+              return key === "TRUE" || key === "T";
+            });
+            const providedFalse = input.options.find((option) => {
+              const key = option.key.trim().toUpperCase();
+              return key === "FALSE" || key === "F";
+            });
+            const hasProvided = Boolean(providedTrue || providedFalse);
+            const trueIsCorrect = hasProvided ? Boolean(providedTrue?.isCorrect) : true;
+            const falseIsCorrect = hasProvided ? Boolean(providedFalse?.isCorrect) : false;
+            return [
+              { key: "TRUE", text: "True", isCorrect: trueIsCorrect },
+              { key: "FALSE", text: "False", isCorrect: falseIsCorrect },
+            ];
+          })()
+        : input.options.map((option) => ({
+            key: option.key.trim().toUpperCase(),
+            text: option.text.trim(),
+            isCorrect: Boolean(option.isCorrect),
+          }));
+
+    if (normalizedOptions.length < 2) {
+      throw new ApiError(400, "At least two options are required");
+    }
+
+    const dedupeKeySet = new Set<string>();
+    for (const option of normalizedOptions) {
+      if (!option.key || !option.text) {
+        throw new ApiError(400, "Option key/text cannot be empty");
+      }
+      if (dedupeKeySet.has(option.key)) {
+        throw new ApiError(400, "Duplicate option keys are not allowed");
+      }
+      dedupeKeySet.add(option.key);
+    }
+
+    const correctCount = normalizedOptions.filter((option) => option.isCorrect).length;
+    if (correctCount === 0) {
+      throw new ApiError(400, "At least one correct option is required");
+    }
+    if (normalizedType === "single_choice" || normalizedType === "true_false") {
+      if (correctCount !== 1) {
+        throw new ApiError(400, `${normalizedType} question must have exactly one correct option`);
+      }
+    }
+
+    const insertQuestion = await client.query(
+      `
+        INSERT INTO quiz_questions
+          (exam_session_id, subject_id, question_text, question_type, points, ordering, is_active, created_by_binding_id, created_at, updated_at)
+        VALUES
+          ($1, $2, $3, $4, $5, $6, TRUE, $7, now(), now())
+      `,
+      [
+        sessionId,
+        input.subjectId,
+        input.questionText.trim(),
+        normalizedType,
+        Math.max(1, input.points ?? 1),
+        Math.max(1, input.ordering ?? 1),
+        actorBindingId,
+      ]
+    );
+    const questionId = Number(insertQuestion.insertId ?? 0);
+    if (!Number.isFinite(questionId) || questionId <= 0) {
+      throw new ApiError(500, "Failed to create quiz question");
+    }
+
+    for (let index = 0; index < normalizedOptions.length; index += 1) {
+      const option = normalizedOptions[index];
+      await client.query(
+        `
+          INSERT INTO quiz_question_options
+            (question_id, option_key, option_text, is_correct, ordering, created_at)
+          VALUES
+            ($1, $2, $3, $4, $5, now())
+        `,
+        [questionId, option.key, option.text, option.isCorrect, index + 1]
+      );
+    }
+
+    return questionId;
+  }
+
+  private async logTeacherSubmission(
+    client: DbClient,
+    sessionId: string,
+    bindingId: string,
+    actionType: string,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    await client.query(
+      `
+        INSERT INTO quiz_teacher_submissions (exam_session_id, binding_id, action_type, payload, created_at)
+        VALUES ($1, $2, $3, $4, now())
+      `,
+      [sessionId, bindingId, actionType, JSON.stringify(payload)]
+    );
   }
 
   private async setSessionState(client: DbClient, sessionId: string, state: SessionState): Promise<void> {
@@ -2076,6 +4257,187 @@ export class SessionService {
     return crypto.createHash("sha256").update(value).digest("hex");
   }
 
+  private hashStudentPassword(password: string): string {
+    return crypto.createHmac("sha256", config.jwtSecret).update(password).digest("base64");
+  }
+
+  private signStudentAuthToken(studentId: number): string {
+    return jwt.sign(
+      { sub: `student:${studentId}`, typ: "student_auth" },
+      config.jwtSecret,
+      {
+        issuer: "edufika-session-api",
+        expiresIn: config.studentAuthTtlHours * 3600,
+      }
+    );
+  }
+
+  private async authenticateStudentAuthToken(token?: string): Promise<{ studentId: number }> {
+    const rawToken = token?.trim();
+    if (!rawToken) {
+      throw new ApiError(401, "Missing student auth token");
+    }
+    let decoded: StudentAuthTokenPayload;
+    try {
+      decoded = jwt.verify(rawToken, config.jwtSecret, {
+        issuer: "edufika-session-api",
+      }) as StudentAuthTokenPayload;
+    } catch {
+      throw new ApiError(401, "Invalid student auth token");
+    }
+    if (decoded.typ !== "student_auth" || !decoded.sub) {
+      throw new ApiError(401, "Invalid student auth token");
+    }
+    const match = /^student:(\d+)$/.exec(decoded.sub);
+    if (!match) {
+      throw new ApiError(401, "Invalid student auth token");
+    }
+    const studentId = Number(match[1]);
+    if (!Number.isFinite(studentId) || studentId <= 0) {
+      throw new ApiError(401, "Invalid student auth token");
+    }
+    const client = await dbPool.connect();
+    try {
+      const result = await client.query<{ studentid: number }>(
+        `
+          SELECT studentid
+          FROM student_accounts
+          WHERE studentid = $1
+          LIMIT 1
+        `,
+        [studentId]
+      );
+      if (result.rowCount === 0) {
+        throw new ApiError(401, "Student account not found");
+      }
+    } finally {
+      client.release();
+    }
+    return { studentId };
+  }
+
+  private async insertStudentTokenForSession(sessionId: string): Promise<string> {
+    const client = await dbPool.connect();
+    try {
+      let token = this.generateSessionToken("student");
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const exists = await client.query<{ token: string }>(
+          `SELECT token FROM session_tokens WHERE token = $1 LIMIT 1`,
+          [token]
+        );
+        if (exists.rowCount === 0) {
+          break;
+        }
+        token = this.generateSessionToken("student");
+      }
+      await client.query(
+        `
+          INSERT INTO session_tokens (token, exam_session_id, claimed, expires_at, role)
+          VALUES ($1, $2, FALSE, DATE_ADD(NOW(), INTERVAL $3 MINUTE), 'student')
+        `,
+        [token, sessionId, config.defaultTokenTtlMinutes]
+      );
+      return token;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async uploadMarkdownToGoogleDrive(
+    fileName: string,
+    markdown: string,
+    metadata: Record<string, unknown>
+  ): Promise<{ file_id: string; web_view_link?: string }> {
+    const clientEmail = config.googleDriveClientEmail;
+    const privateKey = config.googleDrivePrivateKey;
+    const folderId = config.googleDriveFolderId;
+    if (!clientEmail || !privateKey || !folderId) {
+      throw new ApiError(500, "Google Drive credentials are not configured");
+    }
+    const fetchFn = (globalThis as any).fetch as
+      | ((input: string, init?: { method?: string; headers?: Record<string, string>; body?: any }) => Promise<any>)
+      | undefined;
+    if (!fetchFn) {
+      throw new ApiError(500, "Fetch API is not available");
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const assertion = jwt.sign(
+      {
+        iss: clientEmail,
+        scope: config.googleDriveScope,
+        aud: "https://oauth2.googleapis.com/token",
+        iat: now,
+        exp: now + 3600,
+      },
+      privateKey,
+      { algorithm: "RS256" }
+    );
+    const tokenResponse = await fetchFn("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        assertion,
+      }).toString(),
+    });
+    const tokenPayload = await tokenResponse.json().catch(() => ({}));
+    if (!tokenResponse.ok) {
+      const message = typeof tokenPayload?.error === "string"
+        ? tokenPayload.error
+        : tokenPayload?.error_description || "Failed to obtain Google Drive token";
+      throw new ApiError(502, message);
+    }
+    const accessToken = String(tokenPayload.access_token ?? "");
+    if (!accessToken) {
+      throw new ApiError(502, "Google Drive token missing");
+    }
+
+    const boundary = `edufika_${Date.now()}`;
+    const description = Object.keys(metadata || {}).length > 0 ? JSON.stringify(metadata) : undefined;
+    const metadataPayload: Record<string, unknown> = {
+      name: fileName,
+      parents: [folderId],
+      mimeType: "text/markdown",
+    };
+    if (description) {
+      metadataPayload.description = description;
+    }
+
+    const body = [
+      `--${boundary}`,
+      "Content-Type: application/json; charset=UTF-8",
+      "",
+      JSON.stringify(metadataPayload),
+      `--${boundary}`,
+      "Content-Type: text/markdown; charset=UTF-8",
+      "",
+      markdown,
+      `--${boundary}--`,
+      "",
+    ].join("\r\n");
+
+    const uploadResponse = await fetchFn(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": `multipart/related; boundary=${boundary}`,
+        },
+        body,
+      }
+    );
+    const uploadPayload = await uploadResponse.json().catch(() => ({}));
+    if (!uploadResponse.ok) {
+      const message = uploadPayload?.error?.message || "Failed to upload file to Google Drive";
+      throw new ApiError(502, message);
+    }
+    return {
+      file_id: String(uploadPayload.id ?? ""),
+      web_view_link: uploadPayload.webViewLink ? String(uploadPayload.webViewLink) : undefined,
+    };
+  }
+
   private async buildSessionArchivePayload(client: DbClient, sessionId: string): Promise<Record<string, unknown>> {
     const examSessionResult = await client.query<Record<string, unknown>>(
       `
@@ -2172,6 +4534,90 @@ export class SessionService {
       [sessionId]
     );
 
+    const quizExamResult = await client.query<Record<string, unknown>>(
+      `
+        SELECT *
+        FROM quiz_exams
+        WHERE exam_session_id = $1
+        LIMIT 1
+      `,
+      [sessionId]
+    );
+
+    const quizSubjectsResult = await client.query<Record<string, unknown>>(
+      `
+        SELECT *
+        FROM quiz_subjects
+        WHERE exam_session_id = $1
+      `,
+      [sessionId]
+    );
+
+    const quizQuestionsResult = await client.query<Record<string, unknown>>(
+      `
+        SELECT *
+        FROM quiz_questions
+        WHERE exam_session_id = $1
+      `,
+      [sessionId]
+    );
+
+    const quizQuestionIds = quizQuestionsResult.rows
+      .map((row) => Number(row.id))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .map((value) => String(value));
+
+    let quizOptionsRows: Record<string, unknown>[] = [];
+    if (quizQuestionIds.length > 0) {
+      const inQuizQuestions = this.buildInClause(quizQuestionIds, 1);
+      const quizOptionsResult = await client.query<Record<string, unknown>>(
+        `
+          SELECT *
+          FROM quiz_question_options
+          WHERE question_id IN (${inQuizQuestions.clause})
+        `,
+        inQuizQuestions.params
+      );
+      quizOptionsRows = quizOptionsResult.rows;
+    }
+
+    const quizAttemptsResult = await client.query<Record<string, unknown>>(
+      `
+        SELECT *
+        FROM quiz_student_attempts
+        WHERE exam_session_id = $1
+      `,
+      [sessionId]
+    );
+
+    const attemptIds = quizAttemptsResult.rows
+      .map((row) => Number(row.id))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .map((value) => String(value));
+
+    let quizAnswersRows: Record<string, unknown>[] = [];
+    if (attemptIds.length > 0) {
+      const inAttempts = this.buildInClause(attemptIds, 1);
+      const quizAnswersResult = await client.query<Record<string, unknown>>(
+        `
+          SELECT *
+          FROM quiz_student_answers
+          WHERE attempt_id IN (${inAttempts.clause})
+        `,
+        inAttempts.params
+      );
+      quizAnswersRows = quizAnswersResult.rows;
+    }
+
+    const quizTeacherSubmissionsResult = await client.query<Record<string, unknown>>(
+      `
+        SELECT *
+        FROM quiz_teacher_submissions
+        WHERE exam_session_id = $1
+      `,
+      [sessionId]
+    );
+
     return {
       exam_session: examSessionResult.rows[0] ?? null,
       session_tokens: sessionTokensResult.rows,
@@ -2183,6 +4629,13 @@ export class SessionService {
       proctor_pins: proctorPinsResult.rows,
       student_pin_templates: studentPinTemplateResult.rows,
       student_pin_template: studentPinTemplateResult.rows[0] ?? {},
+      quiz_exam: quizExamResult.rows[0] ?? null,
+      quiz_subjects: quizSubjectsResult.rows,
+      quiz_questions: quizQuestionsResult.rows,
+      quiz_question_options: quizOptionsRows,
+      quiz_attempts: quizAttemptsResult.rows,
+      quiz_answers: quizAnswersRows,
+      quiz_teacher_submissions: quizTeacherSubmissionsResult.rows,
     };
   }
 
@@ -2220,6 +4673,56 @@ function toBoolean(value: unknown): boolean {
     return value === "1" || value.toLowerCase() === "true";
   }
   return Boolean(value);
+}
+
+function normalizeExamMode(value: unknown): ExamMode {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (normalized === "HYBRID") {
+    return "HYBRID";
+  }
+  if (normalized === "IN_APP_QUIZ") {
+    return "IN_APP_QUIZ";
+  }
+  return "BROWSER_LOCKDOWN";
+}
+
+function parseJsonNumberArray(raw: string | null): number[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((entry) => Number(entry))
+      .filter((entry) => Number.isFinite(entry) && entry > 0)
+      .map((entry) => Math.trunc(entry));
+  } catch {
+    return [];
+  }
+}
+
+function arraysEqual(left: number[], right: number[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function shuffleInPlace<T>(items: T[]): void {
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const current = items[index];
+    items[index] = items[swapIndex];
+    items[swapIndex] = current;
+  }
 }
 
 function isWhitelisted(rawTargetUrl: string, whitelist: string[]): boolean {

@@ -19,5 +19,9 @@
  18. Whitelisted URL data should be stored in the database for the app to refer to instead of being stored locally. (Fixed)
  19. For the RN web browser screen, add a timer that indicates how much time left until their session token expires. (Fixed)
  20. Proctor PIN is set only once during the start of the exams, stored in the database and is refreshed daily. Implement the RN UI, the functionality and the database schema (if needed) so that an admin can submit the PIN from Admin Dashboard and have it be stored in the database. (Fixed)
+ 21. Compute heartbeat/risk locally for the full session (for low latency, no network false positives).
+22. Keep periodic backend sync (every few seconds) when online, not only on logout/violation.
+23. Send critical events immediately (LOCKED, REVOKED, SCREEN_OFF, etc.), but enforce lock locally even before server ack.
+24. On offline mode, mark session DEGRADED locally, queue events, then reconcile on reconnect.
 
  - * Notes : 15-02-2026

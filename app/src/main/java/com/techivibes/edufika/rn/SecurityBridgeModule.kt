@@ -48,6 +48,7 @@ class SecurityBridgeModule(
             "Multi-window/split-screen terdeteksi saat sesi siswa aktif."
         private const val MULTI_WINDOW_RECHECK_DELAY_MS = 450L
         private const val LOCK_EVENT_DEDUPE_WINDOW_MS = 2_000L
+        private const val ADMIN_WORKSPACE_CHUNK_SIZE = 12_000
     }
 
     private var receiversRegistered = false
@@ -255,7 +256,7 @@ class SecurityBridgeModule(
     @ReactMethod
     fun getAdminWorkspaceCache(promise: Promise) {
         runCatching {
-            promise.resolve(prefs.getString(TestConstants.PREF_ADMIN_WORKSPACE_CACHE, "") ?: "")
+            promise.resolve(readAdminWorkspaceCache())
         }.onFailure { error ->
             promise.reject("admin_workspace_cache_read_failed", error)
         }
@@ -263,16 +264,73 @@ class SecurityBridgeModule(
 
     @ReactMethod
     fun setAdminWorkspaceCache(value: String) {
-        prefs.edit()
-            .putString(TestConstants.PREF_ADMIN_WORKSPACE_CACHE, value)
-            .apply()
+        writeAdminWorkspaceCache(value)
     }
 
     @ReactMethod
     fun clearAdminWorkspaceCache() {
-        prefs.edit()
-            .remove(TestConstants.PREF_ADMIN_WORKSPACE_CACHE)
-            .apply()
+        clearAdminWorkspaceCacheInternal()
+    }
+
+    private fun readAdminWorkspaceCache(): String {
+        val chunkCount = prefs.getInt(TestConstants.PREF_ADMIN_WORKSPACE_CACHE_CHUNK_COUNT, 0)
+        if (chunkCount > 0) {
+            val builder = StringBuilder()
+            for (index in 0 until chunkCount) {
+                val chunk = prefs.getString(adminWorkspaceChunkKey(index), "") ?: ""
+                builder.append(chunk)
+            }
+            val assembled = builder.toString()
+            if (assembled.isNotEmpty()) {
+                return assembled
+            }
+        }
+        return prefs.getString(TestConstants.PREF_ADMIN_WORKSPACE_CACHE, "") ?: ""
+    }
+
+    private fun writeAdminWorkspaceCache(value: String) {
+        val normalized = value
+        val previousCount = prefs.getInt(TestConstants.PREF_ADMIN_WORKSPACE_CACHE_CHUNK_COUNT, 0)
+        val editor = prefs.edit()
+
+        if (normalized.isBlank()) {
+            editor.remove(TestConstants.PREF_ADMIN_WORKSPACE_CACHE)
+            editor.remove(TestConstants.PREF_ADMIN_WORKSPACE_CACHE_CHUNK_COUNT)
+            for (index in 0 until previousCount) {
+                editor.remove(adminWorkspaceChunkKey(index))
+            }
+            editor.apply()
+            return
+        }
+
+        val chunkCount =
+            ((normalized.length + ADMIN_WORKSPACE_CHUNK_SIZE - 1) / ADMIN_WORKSPACE_CHUNK_SIZE).coerceAtLeast(1)
+        editor.putInt(TestConstants.PREF_ADMIN_WORKSPACE_CACHE_CHUNK_COUNT, chunkCount)
+        for (index in 0 until chunkCount) {
+            val start = index * ADMIN_WORKSPACE_CHUNK_SIZE
+            val end = (start + ADMIN_WORKSPACE_CHUNK_SIZE).coerceAtMost(normalized.length)
+            editor.putString(adminWorkspaceChunkKey(index), normalized.substring(start, end))
+        }
+        for (index in chunkCount until previousCount) {
+            editor.remove(adminWorkspaceChunkKey(index))
+        }
+        editor.remove(TestConstants.PREF_ADMIN_WORKSPACE_CACHE)
+        editor.apply()
+    }
+
+    private fun clearAdminWorkspaceCacheInternal() {
+        val previousCount = prefs.getInt(TestConstants.PREF_ADMIN_WORKSPACE_CACHE_CHUNK_COUNT, 0)
+        val editor = prefs.edit()
+        editor.remove(TestConstants.PREF_ADMIN_WORKSPACE_CACHE)
+        editor.remove(TestConstants.PREF_ADMIN_WORKSPACE_CACHE_CHUNK_COUNT)
+        for (index in 0 until previousCount) {
+            editor.remove(adminWorkspaceChunkKey(index))
+        }
+        editor.apply()
+    }
+
+    private fun adminWorkspaceChunkKey(index: Int): String {
+        return TestConstants.PREF_ADMIN_WORKSPACE_CACHE_CHUNK_PREFIX + index
     }
 
     @ReactMethod

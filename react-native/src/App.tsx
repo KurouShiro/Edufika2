@@ -2,17 +2,30 @@ import React, { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { Alert, BackHandler, DeviceEventEmitter, NativeModules, Platform } from "react-native";
 import { AppLanguage, tr } from "./i18n";
 import AdminDashboardPanel from "./screens/AdminDashboardPanel";
-import type { AdminGeneratedTokenItem, AdminTokenMonitorItem } from "./screens/AdminDashboardPanel";
+import type {
+  AdminGeneratedTokenItem,
+  AdminTokenMonitorDetail,
+  AdminTokenMonitorItem,
+} from "./screens/AdminDashboardPanel";
 import DeveloperAccessScreen from "./screens/DeveloperAccessScreen";
 import ExamSelectionScreen from "./screens/ExamSelectionScreen";
 import HistoryScreen from "./screens/HistoryScreen";
-import LoginScreen from "./screens/LoginScreen";
+import InAppQuizSelection, { type InAppQuizSession } from "./screens/InAppQuizSelection";
+import LoginSelection from "./screens/LoginSelection";
 import ManualInputFail from "./screens/ManualInputFail";
 import ManualInputScreen from "./screens/ManualInputScreen";
+import QuizStudentScreen from "./screens/QuizStudentScreen";
+import QuizQuestionBuilderScreen, {
+  type QuizQuestionBuilderCache,
+} from "./screens/QuizQuestionBuilderScreen";
+import QuizTeacherScreen from "./screens/QuizTeacherScreen";
+import Register from "./screens/Register";
 import Settings from "./screens/Settings";
 import SplashScreen from "./screens/SplashScreen";
 import SuccessScreen from "./screens/SuccessScreen";
+import TokenLogin from "./screens/TokenLogin";
 import URLWhitelist from "./screens/URLWhitelist";
+import UserLogin from "./screens/UserLogin";
 import ViolationScreen from "./screens/ViolationScreen";
 import { ThemeId, getActiveThemeId, setActiveTheme } from "./screens/Layout";
 
@@ -21,7 +34,11 @@ const QRScannerScreen = lazy(() => import("./screens/QRScannerScreen"));
 
 type ScreenId =
   | "SplashScreen"
-  | "LoginScreen"
+  | "LoginSelection"
+  | "TokenLogin"
+  | "UserLogin"
+  | "Register"
+  | "InAppQuizSelection"
   | "AdminDashboardPanel"
   | "DeveloperAccessScreen"
   | "ExamBrowserScreen"
@@ -33,9 +50,13 @@ type ScreenId =
   | "ManualInputScreen"
   | "ManualInputFail"
   | "HistoryScreen"
+  | "QuizQuestionBuilderScreen"
+  | "QuizTeacherScreen"
+  | "QuizStudentScreen"
   | "Settings";
 
 type Role = "guest" | "student" | "admin" | "developer";
+type SessionMode = "BROWSER_LOCKDOWN" | "HYBRID" | "IN_APP_QUIZ";
 type IssuedTokenRole = "student" | "admin";
 type IssuedTokenStatus = "issued" | "online" | "offline" | "revoked" | "expired";
 
@@ -61,6 +82,14 @@ type TokenLaunchPolicy = {
   updatedAt: string;
 };
 
+type StudentAccount = {
+  name: string;
+  studentClass: string;
+  elective: string;
+  username: string;
+  schoolYear: string;
+};
+
 type BackendMonitorToken = {
   token: string;
   role?: "student" | "admin" | string | null;
@@ -75,15 +104,40 @@ type BackendMonitorToken = {
   last_seen_at?: string | null;
 };
 
+type BackendQuizResultRow = {
+  token?: string | null;
+  status?: string | null;
+  score?: number | string | null;
+  max_score?: number | string | null;
+  submitted_at?: string | null;
+  duration_seconds?: number | string | null;
+  student_name?: string | null;
+  student_class?: string | null;
+  student_elective?: string | null;
+};
+
+type QuizResultByToken = {
+  status: string;
+  score: number;
+  maxScore: number;
+  submittedAtLabel: string;
+  durationSeconds: number;
+  studentName: string;
+  studentClass: string;
+  studentElective: string;
+};
+
 type StudentTokenAdminContext = {
   sessionId: string;
   accessSignature: string;
   bindingId: string;
 };
 
-type AdminWorkspaceSnapshot = {
+type AdminWorkspaceSnapshotV1 = {
   version: 1;
   backendBaseUrl: string;
+  sessionMode: SessionMode;
+  activeExamMode: SessionMode;
   generatedToken: string;
   generatedTokenExpiryAt: string;
   generatedTokenBatch: AdminGeneratedTokenItem[];
@@ -102,6 +156,34 @@ type AdminWorkspaceSnapshot = {
   backendMonitorItems: AdminTokenMonitorItem[];
 };
 
+type AdminWorkspaceEntry = {
+  sessionMode: SessionMode;
+  activeExamMode: SessionMode;
+  generatedToken: string;
+  generatedTokenExpiryAt: string;
+  generatedTokenBatch: AdminGeneratedTokenItem[];
+  tokenBatchCount: string;
+  tokenExpiryMinutes: string;
+  issuedTokens: IssuedToken[];
+  tokenPinPolicies: Record<string, TokenPinPolicy>;
+  tokenLaunchPolicies: Record<string, TokenLaunchPolicy>;
+  tokenLaunchUrlInput: string;
+  proctorPin: string;
+  proctorPinEffectiveDate: string;
+  adminBackendSessionId: string;
+  adminBackendAccessSignature: string;
+  adminBackendBindingId: string;
+  studentTokenAdminContexts: Record<string, StudentTokenAdminContext>;
+  backendMonitorItems: AdminTokenMonitorItem[];
+  quizBuilderCache: QuizQuestionBuilderCache;
+};
+
+type AdminWorkspaceCache = {
+  version: 2;
+  backendBaseUrl: string;
+  admins: Record<string, AdminWorkspaceEntry>;
+};
+
 const STUDENT_TOKEN = "StudentID";
 const ADMIN_TOKEN = "AdminID";
 const DEVELOPER_PASSWORD = "EDU_DEV_ACCESS";
@@ -109,7 +191,14 @@ const DEFAULT_SESSION_EXPIRY_MINUTES = 120;
 const BACKEND_ADMIN_CREATE_KEY = "ed9314856e2e74de0965f657da218b5531988e483f786bd377a68e41cc79cd02ba41b9f47d63c6b50f3c3fc6743010d15090d4bf98c1112a47e6271d449987fa";
 const ADMIN_MONITOR_REFRESH_INTERVAL_MS = 1200;
 const ADMIN_MONITOR_RETRY_INTERVAL_MS = 2500;
-const ADMIN_WORKSPACE_SCHEMA_VERSION = 1;
+const ADMIN_WORKSPACE_SCHEMA_VERSION = 2;
+
+const DEFAULT_QUIZ_BUILDER_CACHE: QuizQuestionBuilderCache = {
+  subjectIdInput: "",
+  questionCountInput: "1",
+  questionDrafts: [],
+  assignTokenInput: "",
+};
 
 const defaultWhitelist = ["https://example.org", "https://school.ac.id/exam"];
 const DEFAULT_BACKEND_BASE_URL = "http://103.27.207.53:8091";
@@ -193,7 +282,195 @@ function normalizeBackendBaseUrl(raw: string): string {
   const withProtocol = trimmed.startsWith("http://") || trimmed.startsWith("https://")
     ? trimmed
     : `http://${trimmed}`;
-  return withProtocol.replace(/\/+$/, "");
+  try {
+    const parsed = new URL(withProtocol);
+    const origin = parsed.origin;
+    const rawPath = parsed.pathname.replace(/\/+$/, "");
+    if (!rawPath || rawPath === "/") {
+      return origin;
+    }
+    if (/\/healthz?$/i.test(rawPath)) {
+      return origin;
+    }
+    return `${origin}${rawPath}`;
+  } catch {
+    return withProtocol.replace(/\/+$/, "");
+  }
+}
+
+function encodeBasicAuth(value: string): string {
+  const btoaFn = (globalThis as typeof globalThis & { btoa?: (data: string) => string }).btoa;
+  if (typeof btoaFn === "function") {
+    return btoaFn(value);
+  }
+  const bufferCtor = (globalThis as typeof globalThis & { Buffer?: any }).Buffer;
+  if (bufferCtor) {
+    return bufferCtor.from(value, "utf8").toString("base64");
+  }
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isValidSessionMode(value: unknown): value is SessionMode {
+  return value === "BROWSER_LOCKDOWN" || value === "HYBRID" || value === "IN_APP_QUIZ";
+}
+
+function buildDefaultAdminWorkspaceEntry(): AdminWorkspaceEntry {
+  return {
+    sessionMode: "BROWSER_LOCKDOWN",
+    activeExamMode: "BROWSER_LOCKDOWN",
+    generatedToken: "",
+    generatedTokenExpiryAt: "",
+    generatedTokenBatch: [],
+    tokenBatchCount: "1",
+    tokenExpiryMinutes: String(DEFAULT_SESSION_EXPIRY_MINUTES),
+    issuedTokens: [],
+    tokenPinPolicies: {},
+    tokenLaunchPolicies: {},
+    tokenLaunchUrlInput: "",
+    proctorPin: "4321",
+    proctorPinEffectiveDate: "",
+    adminBackendSessionId: "",
+    adminBackendAccessSignature: "",
+    adminBackendBindingId: "",
+    studentTokenAdminContexts: {},
+    backendMonitorItems: [],
+    quizBuilderCache: {
+      subjectIdInput: DEFAULT_QUIZ_BUILDER_CACHE.subjectIdInput,
+      questionCountInput: DEFAULT_QUIZ_BUILDER_CACHE.questionCountInput,
+      questionDrafts: [],
+      assignTokenInput: DEFAULT_QUIZ_BUILDER_CACHE.assignTokenInput,
+    },
+  };
+}
+
+function normalizeAdminWorkspaceEntry(raw: unknown): AdminWorkspaceEntry {
+  const base = buildDefaultAdminWorkspaceEntry();
+  if (!isRecord(raw)) {
+    return base;
+  }
+  const entry = raw as Partial<AdminWorkspaceEntry>;
+
+  if (isValidSessionMode(entry.sessionMode)) {
+    base.sessionMode = entry.sessionMode;
+  }
+  if (isValidSessionMode(entry.activeExamMode)) {
+    base.activeExamMode = entry.activeExamMode;
+  }
+  if (typeof entry.generatedToken === "string") {
+    base.generatedToken = entry.generatedToken;
+  }
+  if (typeof entry.generatedTokenExpiryAt === "string") {
+    base.generatedTokenExpiryAt = entry.generatedTokenExpiryAt;
+  }
+  if (Array.isArray(entry.generatedTokenBatch)) {
+    base.generatedTokenBatch = entry.generatedTokenBatch.filter(
+      (item) => item && typeof item.token === "string" && typeof item.expiresAt === "string"
+    );
+  }
+  if (typeof entry.tokenBatchCount === "string" && entry.tokenBatchCount.trim()) {
+    base.tokenBatchCount = entry.tokenBatchCount.trim();
+  }
+  if (typeof entry.tokenExpiryMinutes === "string" && entry.tokenExpiryMinutes.trim()) {
+    base.tokenExpiryMinutes = entry.tokenExpiryMinutes.trim();
+  }
+  if (Array.isArray(entry.issuedTokens)) {
+    base.issuedTokens = entry.issuedTokens as IssuedToken[];
+  }
+  if (isRecord(entry.tokenPinPolicies)) {
+    base.tokenPinPolicies = entry.tokenPinPolicies as Record<string, TokenPinPolicy>;
+  }
+  if (isRecord(entry.tokenLaunchPolicies)) {
+    base.tokenLaunchPolicies = entry.tokenLaunchPolicies as Record<string, TokenLaunchPolicy>;
+  }
+  if (typeof entry.tokenLaunchUrlInput === "string") {
+    base.tokenLaunchUrlInput = entry.tokenLaunchUrlInput;
+  }
+  if (typeof entry.proctorPin === "string" && entry.proctorPin.trim()) {
+    base.proctorPin = entry.proctorPin.trim();
+  } else if (typeof entry.proctorPin === "string") {
+    base.proctorPin = entry.proctorPin;
+  }
+  if (typeof entry.proctorPinEffectiveDate === "string") {
+    base.proctorPinEffectiveDate = entry.proctorPinEffectiveDate;
+  }
+  if (typeof entry.adminBackendSessionId === "string") {
+    base.adminBackendSessionId = entry.adminBackendSessionId;
+  }
+  if (typeof entry.adminBackendAccessSignature === "string") {
+    base.adminBackendAccessSignature = entry.adminBackendAccessSignature;
+  }
+  if (typeof entry.adminBackendBindingId === "string") {
+    base.adminBackendBindingId = entry.adminBackendBindingId;
+  }
+  if (isRecord(entry.studentTokenAdminContexts)) {
+    base.studentTokenAdminContexts = entry.studentTokenAdminContexts as Record<
+      string,
+      StudentTokenAdminContext
+    >;
+  }
+  if (Array.isArray(entry.backendMonitorItems)) {
+    base.backendMonitorItems = entry.backendMonitorItems as AdminTokenMonitorItem[];
+  }
+  if (isRecord(entry.quizBuilderCache)) {
+    const cache = entry.quizBuilderCache as QuizQuestionBuilderCache;
+    base.quizBuilderCache = {
+      subjectIdInput:
+        typeof cache.subjectIdInput === "string"
+          ? cache.subjectIdInput
+          : DEFAULT_QUIZ_BUILDER_CACHE.subjectIdInput,
+      questionCountInput:
+        typeof cache.questionCountInput === "string"
+          ? cache.questionCountInput
+          : DEFAULT_QUIZ_BUILDER_CACHE.questionCountInput,
+      questionDrafts: Array.isArray(cache.questionDrafts) ? cache.questionDrafts : [],
+      assignTokenInput:
+        typeof cache.assignTokenInput === "string"
+          ? cache.assignTokenInput
+          : DEFAULT_QUIZ_BUILDER_CACHE.assignTokenInput,
+    };
+  }
+
+  return base;
+}
+
+function normalizeAdminTokenKey(raw: string): string {
+  return raw.trim().toUpperCase();
+}
+
+function mergeGeneratedTokenBatch(
+  previous: AdminGeneratedTokenItem[],
+  incoming: AdminGeneratedTokenItem[]
+): AdminGeneratedTokenItem[] {
+  const mergedByToken = new Map<string, AdminGeneratedTokenItem>();
+  previous.forEach((item) => {
+    const normalizedToken = String(item?.token ?? "")
+      .trim()
+      .toUpperCase();
+    if (!normalizedToken) {
+      return;
+    }
+    mergedByToken.set(normalizedToken, {
+      token: normalizedToken,
+      expiresAt: String(item.expiresAt ?? ""),
+    });
+  });
+  incoming.forEach((item) => {
+    const normalizedToken = String(item?.token ?? "")
+      .trim()
+      .toUpperCase();
+    if (!normalizedToken) {
+      return;
+    }
+    mergedByToken.set(normalizedToken, {
+      token: normalizedToken,
+      expiresAt: String(item.expiresAt ?? ""),
+    });
+  });
+  return Array.from(mergedByToken.values()).sort((a, b) => a.token.localeCompare(b.token));
 }
 
 function getRuntimeDeviceName(role: "student" | "admin"): string {
@@ -288,6 +565,53 @@ function getTokenLaunchUrl(
   return fallbackKey ? tokenPolicies[fallbackKey]?.url : undefined;
 }
 
+function getTokenLaunchPolicy(
+  tokenPolicies: Record<string, TokenLaunchPolicy>,
+  rawToken: string
+): TokenLaunchPolicy | undefined {
+  const normalizedToken = rawToken.trim().toUpperCase();
+  if (!normalizedToken) {
+    return undefined;
+  }
+  const direct = tokenPolicies[normalizedToken];
+  if (direct) {
+    return direct;
+  }
+  const fallbackKey = Object.keys(tokenPolicies).find(
+    (key) => key.trim().toUpperCase() === normalizedToken
+  );
+  return fallbackKey ? tokenPolicies[fallbackKey] : undefined;
+}
+
+function getTokenLaunchPolicyLabel(
+  tokenPolicies: Record<string, TokenLaunchPolicy>,
+  rawToken: string
+): string {
+  const policy = getTokenLaunchPolicy(tokenPolicies, rawToken);
+  if (!policy?.updatedAt) {
+    return "";
+  }
+  return formatIsoLabel(policy.updatedAt);
+}
+
+function getTokenPinPolicy(
+  tokenPolicies: Record<string, TokenPinPolicy>,
+  rawToken: string
+): TokenPinPolicy | undefined {
+  const normalizedToken = rawToken.trim().toUpperCase();
+  if (!normalizedToken) {
+    return undefined;
+  }
+  const direct = tokenPolicies[normalizedToken];
+  if (direct) {
+    return direct;
+  }
+  const fallbackKey = Object.keys(tokenPolicies).find(
+    (key) => key.trim().toUpperCase() === normalizedToken
+  );
+  return fallbackKey ? tokenPolicies[fallbackKey] : undefined;
+}
+
 function isWhitelisted(url: string, whitelist: string[]): boolean {
   const target = toParsedUrl(url);
   if (!target) {
@@ -371,12 +695,35 @@ function parseExpiryMinutes(raw: string): number {
   return Math.min(43200, Math.max(1, value));
 }
 
+function parseAdminTokenBatchCount(raw: string): number {
+  const value = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    return 1;
+  }
+  return value;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function parseTokenBatchCount(raw: string): number {
   const value = Number.parseInt(raw.trim(), 10);
   if (Number.isNaN(value)) {
     return 1;
   }
   return Math.min(300, Math.max(1, value));
+}
+
+function normalizeExamModeValue(raw: unknown): SessionMode {
+  const value = String(raw ?? "").trim().toUpperCase();
+  if (value === "HYBRID") {
+    return "HYBRID";
+  }
+  if (value === "IN_APP_QUIZ") {
+    return "IN_APP_QUIZ";
+  }
+  return "BROWSER_LOCKDOWN";
 }
 
 function formatTimestamp(millis: number): string {
@@ -414,8 +761,8 @@ function generateSessionId(): string {
 
 export default function App() {
   const [screen, setScreen] = useState<ScreenId>("SplashScreen");
-  const [returnScreen, setReturnScreen] = useState<ScreenId>("LoginScreen");
-  const [developerOrigin, setDeveloperOrigin] = useState<ScreenId>("LoginScreen");
+  const [returnScreen, setReturnScreen] = useState<ScreenId>("LoginSelection");
+  const [developerOrigin, setDeveloperOrigin] = useState<ScreenId>("LoginSelection");
   const [role, setRole] = useState<Role>("guest");
 
   const [language, setLanguage] = useState<AppLanguage>("id");
@@ -429,19 +776,51 @@ export default function App() {
   );
 
   const [tokenInput, setTokenInput] = useState("");
+  const [studentAuthToken, setStudentAuthToken] = useState("");
+  const [studentAccount, setStudentAccount] = useState<StudentAccount | null>(null);
+  const [studentLoginUsername, setStudentLoginUsername] = useState("");
+  const [studentLoginPassword, setStudentLoginPassword] = useState("");
+  const [studentAuthStatus, setStudentAuthStatus] = useState(
+    tr("id", "Masukkan kredensial siswa.", "Enter student credentials.")
+  );
+  const [studentAuthLoading, setStudentAuthLoading] = useState(false);
+  const [registerNama, setRegisterNama] = useState("");
+  const [registerKelas, setRegisterKelas] = useState("");
+  const [registerJurusan, setRegisterJurusan] = useState("");
+  const [registerUsername, setRegisterUsername] = useState("");
+  const [registerPassword, setRegisterPassword] = useState("");
+  const [registerSchoolYear, setRegisterSchoolYear] = useState("");
+  const [registerStatus, setRegisterStatus] = useState(
+    tr("id", "Lengkapi data registrasi siswa.", "Complete student registration data.")
+  );
+  const [registerLoading, setRegisterLoading] = useState(false);
+  const [inAppQuizSessions, setInAppQuizSessions] = useState<InAppQuizSession[]>([]);
+  const [inAppQuizStatus, setInAppQuizStatus] = useState(
+    tr("id", "Sinkronisasi daftar kuis.", "Syncing quiz list.")
+  );
+  const [quizEntryScreen, setQuizEntryScreen] = useState<ScreenId>("ExamSelectionScreen");
   const [generatedToken, setGeneratedToken] = useState("");
   const [generatedTokenExpiryAt, setGeneratedTokenExpiryAt] = useState("");
   const [tokenBatchCount, setTokenBatchCount] = useState("1");
+  const [sessionMode, setSessionMode] = useState<SessionMode>("BROWSER_LOCKDOWN");
   const [generatedTokenBatch, setGeneratedTokenBatch] = useState<AdminGeneratedTokenItem[]>([]);
   const [tokenExpiryMinutes, setTokenExpiryMinutes] = useState("120");
   const [generatedAdminToken, setGeneratedAdminToken] = useState("");
   const [generatedAdminTokenExpiryAt, setGeneratedAdminTokenExpiryAt] = useState("");
   const [adminTokenExpiryMinutes, setAdminTokenExpiryMinutes] = useState("120");
+  const [adminTokenBatchCount, setAdminTokenBatchCount] = useState("1");
+  const [adminGeneratedTokenBatch, setAdminGeneratedTokenBatch] = useState<AdminGeneratedTokenItem[]>([]);
   const [issuedTokens, setIssuedTokens] = useState<IssuedToken[]>([]);
   const [activeIssuedToken, setActiveIssuedToken] = useState("");
   const [tokenPinPolicies, setTokenPinPolicies] = useState<Record<string, TokenPinPolicy>>({});
   const [tokenLaunchPolicies, setTokenLaunchPolicies] = useState<Record<string, TokenLaunchPolicy>>({});
   const [tokenLaunchUrlInput, setTokenLaunchUrlInput] = useState("");
+  const [quizBuilderCache, setQuizBuilderCache] = useState<QuizQuestionBuilderCache>(() => ({
+    subjectIdInput: DEFAULT_QUIZ_BUILDER_CACHE.subjectIdInput,
+    questionCountInput: DEFAULT_QUIZ_BUILDER_CACHE.questionCountInput,
+    questionDrafts: [],
+    assignTokenInput: DEFAULT_QUIZ_BUILDER_CACHE.assignTokenInput,
+  }));
   const [revokeTokenInput, setRevokeTokenInput] = useState("");
   const [revokeTokenStatus, setRevokeTokenStatus] = useState(
     tr("id", "Masukkan token siswa untuk revoke.", "Enter a student token to revoke.")
@@ -450,6 +829,7 @@ export default function App() {
     tr("id", "Kontrol sesi siap.", "Session control ready.")
   );
   const [activeStudentToken, setActiveStudentToken] = useState("");
+  const [activeExamMode, setActiveExamMode] = useState<SessionMode>("BROWSER_LOCKDOWN");
   const [sessionId, setSessionId] = useState(generateSessionId());
   const [riskScore, setRiskScore] = useState(0);
   const [overlayTimestamp, setOverlayTimestamp] = useState(
@@ -510,21 +890,167 @@ export default function App() {
   const [kioskReady, setKioskReady] = useState(false);
   const [studentBackendAccessSignature, setStudentBackendAccessSignature] = useState("");
   const [studentBackendBindingId, setStudentBackendBindingId] = useState("");
+  const [activeAdminTokenKey, setActiveAdminTokenKey] = useState("");
   const [adminBackendSessionId, setAdminBackendSessionId] = useState("");
   const [adminBackendAccessSignature, setAdminBackendAccessSignature] = useState("");
   const [adminBackendBindingId, setAdminBackendBindingId] = useState("");
   const [studentTokenAdminContexts, setStudentTokenAdminContexts] = useState<Record<string, StudentTokenAdminContext>>({});
   const [backendMonitorItems, setBackendMonitorItems] = useState<AdminTokenMonitorItem[]>([]);
+  const [quizResultsByToken, setQuizResultsByToken] = useState<Record<string, QuizResultByToken>>({});
+  const [selectedMonitorToken, setSelectedMonitorToken] = useState("");
   const [backendMonitorError, setBackendMonitorError] = useState("");
   const [adminDashboardTab, setAdminDashboardTab] = useState<"monitor" | "tokens" | "logs">("monitor");
   const multiWindowWatchLoggedRef = useRef(false);
   const adminMonitorFetchInFlightRef = useRef(false);
   const adminWorkspaceHydratedRef = useRef(false);
+  const adminWorkspaceCacheRef = useRef<AdminWorkspaceCache>({
+    version: ADMIN_WORKSPACE_SCHEMA_VERSION,
+    backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
+    admins: {},
+  });
+  const legacyAdminWorkspaceRef = useRef<AdminWorkspaceEntry | null>(null);
+  const pendingAdminTokenRef = useRef<string | null>(null);
+  const pendingAdminTokenOptionsRef = useRef<{ preserveBackendSession: boolean } | null>(null);
+
+  const applyAdminWorkspaceEntry = (
+    entry: AdminWorkspaceEntry,
+    options?: { preserveBackendSession?: boolean }
+  ) => {
+    setSessionMode(entry.sessionMode);
+    setActiveExamMode(entry.activeExamMode);
+    setGeneratedToken(entry.generatedToken);
+    setGeneratedTokenExpiryAt(entry.generatedTokenExpiryAt);
+    setGeneratedTokenBatch(entry.generatedTokenBatch);
+    setTokenBatchCount(entry.tokenBatchCount);
+    setTokenExpiryMinutes(entry.tokenExpiryMinutes);
+    setIssuedTokens(entry.issuedTokens);
+    setTokenPinPolicies(entry.tokenPinPolicies);
+    setTokenLaunchPolicies(entry.tokenLaunchPolicies);
+    setTokenLaunchUrlInput(entry.tokenLaunchUrlInput);
+    setProctorPin(entry.proctorPin);
+    setProctorPinEffectiveDate(entry.proctorPinEffectiveDate);
+    if (!options?.preserveBackendSession) {
+      setAdminBackendSessionId(entry.adminBackendSessionId);
+      setAdminBackendAccessSignature(entry.adminBackendAccessSignature);
+      setAdminBackendBindingId(entry.adminBackendBindingId);
+    }
+    setStudentTokenAdminContexts(entry.studentTokenAdminContexts);
+    setBackendMonitorItems(entry.backendMonitorItems);
+    setQuizBuilderCache(entry.quizBuilderCache);
+  };
+
+  const buildAdminWorkspaceEntry = (): AdminWorkspaceEntry => ({
+    sessionMode,
+    activeExamMode,
+    generatedToken,
+    generatedTokenExpiryAt,
+    generatedTokenBatch,
+    tokenBatchCount,
+    tokenExpiryMinutes,
+    issuedTokens,
+    tokenPinPolicies,
+    tokenLaunchPolicies,
+    tokenLaunchUrlInput,
+    proctorPin,
+    proctorPinEffectiveDate,
+    adminBackendSessionId,
+    adminBackendAccessSignature,
+    adminBackendBindingId,
+    studentTokenAdminContexts,
+    backendMonitorItems,
+    quizBuilderCache,
+  });
+
+  const hydrateAdminWorkspaceForToken = (
+    rawToken: string,
+    options?: { preserveBackendSession?: boolean }
+  ) => {
+    const tokenKey = normalizeAdminTokenKey(rawToken);
+    if (!tokenKey) {
+      return;
+    }
+    if (!adminWorkspaceHydratedRef.current) {
+      pendingAdminTokenRef.current = tokenKey;
+      pendingAdminTokenOptionsRef.current = {
+        preserveBackendSession: Boolean(options?.preserveBackendSession),
+      };
+      return;
+    }
+
+    const cache = adminWorkspaceCacheRef.current;
+    let entry: AdminWorkspaceEntry | null = null;
+    if (cache.admins && cache.admins[tokenKey]) {
+      entry = normalizeAdminWorkspaceEntry(cache.admins[tokenKey]);
+      cache.admins = { ...cache.admins, [tokenKey]: entry };
+      adminWorkspaceCacheRef.current = {
+        version: ADMIN_WORKSPACE_SCHEMA_VERSION,
+        backendBaseUrl: cache.backendBaseUrl,
+        admins: cache.admins,
+      };
+    } else if (legacyAdminWorkspaceRef.current) {
+      entry = normalizeAdminWorkspaceEntry(legacyAdminWorkspaceRef.current);
+      legacyAdminWorkspaceRef.current = null;
+      cache.admins = { ...cache.admins, [tokenKey]: entry };
+      adminWorkspaceCacheRef.current = {
+        version: ADMIN_WORKSPACE_SCHEMA_VERSION,
+        backendBaseUrl: cache.backendBaseUrl || backendBaseUrl,
+        admins: cache.admins,
+      };
+      runSecurityCall(() =>
+        securityModule?.setAdminWorkspaceCache?.(JSON.stringify(adminWorkspaceCacheRef.current))
+      );
+    } else {
+      entry = buildDefaultAdminWorkspaceEntry();
+    }
+
+    applyAdminWorkspaceEntry(entry, options);
+  };
+
+  const activateAdminWorkspace = (
+    rawToken: string,
+    options?: { preserveBackendSession?: boolean }
+  ) => {
+    const tokenKey = normalizeAdminTokenKey(rawToken);
+    if (!tokenKey) {
+      return;
+    }
+    if (!adminWorkspaceHydratedRef.current) {
+      pendingAdminTokenRef.current = tokenKey;
+      pendingAdminTokenOptionsRef.current = {
+        preserveBackendSession: Boolean(options?.preserveBackendSession),
+      };
+      return;
+    }
+    setActiveAdminTokenKey(tokenKey);
+    hydrateAdminWorkspaceForToken(tokenKey, options);
+  };
+
+  const resetAdminWorkspaceState = (options?: { preserveBackendSession?: boolean }) => {
+    applyAdminWorkspaceEntry(buildDefaultAdminWorkspaceEntry(), options);
+    setBackendMonitorError("");
+    setRevokeTokenInput("");
+    setRevokeTokenStatus(
+      tr(language, "Masukkan token siswa untuk revoke.", "Enter a student token to revoke.")
+    );
+    setSessionControlStatus(tr(language, "Kontrol sesi siap.", "Session control ready."));
+  };
+
+  const clearAdminWorkspaceCache = () => {
+    adminWorkspaceCacheRef.current = {
+      version: ADMIN_WORKSPACE_SCHEMA_VERSION,
+      backendBaseUrl,
+      admins: {},
+    };
+    legacyAdminWorkspaceRef.current = null;
+    pendingAdminTokenRef.current = null;
+    pendingAdminTokenOptionsRef.current = null;
+    runSecurityCall(() => securityModule?.clearAdminWorkspaceCache?.());
+  };
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setBootMessage(tr(language, "Semua layanan inti aktif.", "All core services online."));
-      setScreen("LoginScreen");
+      setScreen("LoginSelection");
     }, 1200);
     return () => clearTimeout(timer);
   }, []);
@@ -591,71 +1117,42 @@ export default function App() {
         if (!mounted) {
           return;
         }
-        const parsed = JSON.parse(String(rawSnapshot ?? "{}")) as Partial<AdminWorkspaceSnapshot>;
-        if (parsed.version !== ADMIN_WORKSPACE_SCHEMA_VERSION) {
-          return;
-        }
-        if (typeof parsed.backendBaseUrl === "string" && parsed.backendBaseUrl.trim()) {
-          setBackendBaseUrl(parsed.backendBaseUrl.trim());
-        }
-        if (typeof parsed.generatedToken === "string") {
-          setGeneratedToken(parsed.generatedToken);
-        }
-        if (typeof parsed.generatedTokenExpiryAt === "string") {
-          setGeneratedTokenExpiryAt(parsed.generatedTokenExpiryAt);
-        }
-        if (typeof parsed.tokenBatchCount === "string" && parsed.tokenBatchCount.trim()) {
-          setTokenBatchCount(parsed.tokenBatchCount.trim());
-        }
-        if (typeof parsed.tokenExpiryMinutes === "string" && parsed.tokenExpiryMinutes.trim()) {
-          setTokenExpiryMinutes(parsed.tokenExpiryMinutes.trim());
-        }
-        if (Array.isArray(parsed.generatedTokenBatch)) {
-          setGeneratedTokenBatch(parsed.generatedTokenBatch.filter((item) => (
-            item &&
-            typeof item.token === "string" &&
-            typeof item.expiresAt === "string"
-          )));
-        }
-        if (Array.isArray(parsed.issuedTokens)) {
-          setIssuedTokens(parsed.issuedTokens);
-        }
-        if (parsed.tokenPinPolicies && typeof parsed.tokenPinPolicies === "object") {
-          setTokenPinPolicies(parsed.tokenPinPolicies as Record<string, TokenPinPolicy>);
-        }
-        if (parsed.tokenLaunchPolicies && typeof parsed.tokenLaunchPolicies === "object") {
-          setTokenLaunchPolicies(parsed.tokenLaunchPolicies as Record<string, TokenLaunchPolicy>);
-        }
-        if (typeof parsed.tokenLaunchUrlInput === "string") {
-          setTokenLaunchUrlInput(parsed.tokenLaunchUrlInput);
-        }
-        if (typeof parsed.proctorPin === "string" && parsed.proctorPin.trim()) {
-          setProctorPin(parsed.proctorPin.trim());
-        }
-        if (typeof parsed.proctorPinEffectiveDate === "string") {
-          setProctorPinEffectiveDate(parsed.proctorPinEffectiveDate);
-        }
-        if (typeof parsed.adminBackendSessionId === "string") {
-          setAdminBackendSessionId(parsed.adminBackendSessionId);
-        }
-        if (typeof parsed.adminBackendAccessSignature === "string") {
-          setAdminBackendAccessSignature(parsed.adminBackendAccessSignature);
-        }
-        if (typeof parsed.adminBackendBindingId === "string") {
-          setAdminBackendBindingId(parsed.adminBackendBindingId);
-        }
-        if (parsed.studentTokenAdminContexts && typeof parsed.studentTokenAdminContexts === "object") {
-          setStudentTokenAdminContexts(
-            parsed.studentTokenAdminContexts as Record<string, StudentTokenAdminContext>
-          );
-        }
-        if (Array.isArray(parsed.backendMonitorItems)) {
-          setBackendMonitorItems(parsed.backendMonitorItems);
+        const parsed = JSON.parse(String(rawSnapshot ?? "{}")) as
+          | Partial<AdminWorkspaceCache>
+          | Partial<AdminWorkspaceSnapshotV1>;
+        const version = Number((parsed as { version?: unknown })?.version ?? 0);
+        if (version === 2 && isRecord(parsed)) {
+          const backendUrl =
+            typeof parsed.backendBaseUrl === "string" ? parsed.backendBaseUrl.trim() : "";
+          if (backendUrl) {
+            setBackendBaseUrl(backendUrl);
+          }
+          adminWorkspaceCacheRef.current = {
+            version: ADMIN_WORKSPACE_SCHEMA_VERSION,
+            backendBaseUrl: backendUrl || adminWorkspaceCacheRef.current.backendBaseUrl,
+            admins: isRecord(parsed.admins)
+              ? (parsed.admins as Record<string, AdminWorkspaceEntry>)
+              : {},
+          };
+        } else if (version === 1 && isRecord(parsed)) {
+          const legacy = parsed as AdminWorkspaceSnapshotV1;
+          if (typeof legacy.backendBaseUrl === "string" && legacy.backendBaseUrl.trim()) {
+            setBackendBaseUrl(legacy.backendBaseUrl.trim());
+          }
+          legacyAdminWorkspaceRef.current = normalizeAdminWorkspaceEntry(legacy);
         }
       } catch {
         // Ignore invalid/empty cache payload and continue with runtime defaults.
       } finally {
         adminWorkspaceHydratedRef.current = true;
+        if (pendingAdminTokenRef.current) {
+          const token = pendingAdminTokenRef.current;
+          const options = pendingAdminTokenOptionsRef.current ?? undefined;
+          pendingAdminTokenRef.current = null;
+          pendingAdminTokenOptionsRef.current = null;
+          setActiveAdminTokenKey(token);
+          hydrateAdminWorkspaceForToken(token, options ?? undefined);
+        }
       }
     };
     void hydrateAdminWorkspace();
@@ -668,34 +1165,29 @@ export default function App() {
     if (!adminWorkspaceHydratedRef.current) {
       return;
     }
-    const snapshot: AdminWorkspaceSnapshot = {
+    const cache = adminWorkspaceCacheRef.current;
+    const nextAdmins =
+      role === "admin" && activeAdminTokenKey
+        ? { ...cache.admins, [activeAdminTokenKey]: buildAdminWorkspaceEntry() }
+        : cache.admins;
+    const nextCache: AdminWorkspaceCache = {
       version: ADMIN_WORKSPACE_SCHEMA_VERSION,
       backendBaseUrl,
-      generatedToken,
-      generatedTokenExpiryAt,
-      generatedTokenBatch,
-      tokenBatchCount,
-      tokenExpiryMinutes,
-      issuedTokens,
-      tokenPinPolicies,
-      tokenLaunchPolicies,
-      tokenLaunchUrlInput,
-      proctorPin,
-      proctorPinEffectiveDate,
-      adminBackendSessionId,
-      adminBackendAccessSignature,
-      adminBackendBindingId,
-      studentTokenAdminContexts,
-      backendMonitorItems,
+      admins: nextAdmins,
     };
+    adminWorkspaceCacheRef.current = nextCache;
     runSecurityCall(() =>
-      securityModule?.setAdminWorkspaceCache?.(JSON.stringify(snapshot))
+      securityModule?.setAdminWorkspaceCache?.(JSON.stringify(nextCache))
     );
   }, [
     adminBackendAccessSignature,
     adminBackendBindingId,
     adminBackendSessionId,
     backendBaseUrl,
+    role,
+    activeAdminTokenKey,
+    sessionMode,
+    activeExamMode,
     backendMonitorItems,
     generatedToken,
     generatedTokenBatch,
@@ -709,6 +1201,7 @@ export default function App() {
     tokenLaunchPolicies,
     tokenLaunchUrlInput,
     tokenPinPolicies,
+    quizBuilderCache,
   ]);
 
   useEffect(() => {
@@ -743,7 +1236,11 @@ export default function App() {
     if (!violationSystemEnabled) {
       return;
     }
-    if (riskScore >= 12 && role === "student" && screen === "ExamBrowserScreen") {
+    if (
+      riskScore >= 12 &&
+      role === "student" &&
+      (screen === "ExamBrowserScreen" || screen === "QuizStudentScreen")
+    ) {
       setViolationReason(
         tr(
           language,
@@ -823,6 +1320,12 @@ export default function App() {
     const sessionIdForSync = sessionId || `RN-${Date.now()}`;
     const signatureForSync = studentBackendAccessSignature.trim();
     const bindingForSync = studentBackendBindingId.trim();
+    const examActiveScreen =
+      screen === "ExamBrowserScreen" || screen === "QuizStudentScreen";
+    const examUrlForSync =
+      screen === "QuizStudentScreen"
+        ? `edufika://in-app-quiz/${sessionIdForSync}`
+        : examUrl;
 
     runSecurityCall(() =>
       securityModule?.syncStudentSession?.(
@@ -831,12 +1334,12 @@ export default function App() {
         signatureForSync || `rn-local-signature-${tokenForSync}`,
         bindingForSync || `rn-local-binding-${tokenForSync}`,
         sessionExpiresAt ?? 0,
-        examUrl,
-        screen === "ExamBrowserScreen"
+        examUrlForSync,
+        examActiveScreen
       )
     );
 
-    if (screen === "ExamBrowserScreen" && signatureForSync && bindingForSync && violationSystemEnabled) {
+    if (examActiveScreen && signatureForSync && bindingForSync && violationSystemEnabled) {
       runSecurityCall(() => securityModule?.startHeartbeat?.());
     } else {
       runSecurityCall(() => securityModule?.stopHeartbeat?.());
@@ -985,7 +1488,7 @@ export default function App() {
   useEffect(() => {
     const shouldWatchMultiWindow =
       role === "student" &&
-      screen === "ExamBrowserScreen" &&
+      (screen === "ExamBrowserScreen" || screen === "QuizStudentScreen") &&
       violationSystemEnabled &&
       splitScreenDetectionEnabled;
     if (!shouldWatchMultiWindow || !securityModule?.checkAndLockIfMultiWindow) {
@@ -1074,10 +1577,17 @@ export default function App() {
   const parseJsonResponse = async (response: any): Promise<any> => {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const message =
+      let message =
         typeof payload?.error === "string"
           ? payload.error
           : `HTTP ${response.status}`;
+      if (response.status === 404 && typeof payload?.error !== "string") {
+        message = tr(
+          language,
+          "Endpoint tidak ditemukan. Periksa URL backend.",
+          "Endpoint not found. Check backend URL."
+        );
+      }
       throw new Error(message);
     }
     return payload;
@@ -1123,6 +1633,31 @@ export default function App() {
         .filter((entry): entry is AdminTokenMonitorItem => entry !== null);
     };
 
+    const mapQuizResultsByToken = (
+      rows: BackendQuizResultRow[]
+    ): Record<string, QuizResultByToken> => {
+      const mapped: Record<string, QuizResultByToken> = {};
+      rows.forEach((row) => {
+        const token = String(row.token ?? "")
+          .trim()
+          .toUpperCase();
+        if (!token) {
+          return;
+        }
+        mapped[token] = {
+          status: String(row.status ?? "STARTED").toUpperCase(),
+          score: Number(row.score ?? 0),
+          maxScore: Number(row.max_score ?? 0),
+          submittedAtLabel: formatIsoLabel(row.submitted_at ?? null),
+          durationSeconds: Number(row.duration_seconds ?? 0),
+          studentName: String(row.student_name ?? "").trim() || "-",
+          studentClass: String(row.student_class ?? "").trim() || "-",
+          studentElective: String(row.student_elective ?? "").trim() || "-",
+        };
+      });
+      return mapped;
+    };
+
     const fetchMonitorPayload = async (
       context: StudentTokenAdminContext
     ): Promise<AdminTokenMonitorItem[]> => {
@@ -1142,6 +1677,40 @@ export default function App() {
       return mapMonitorTokens(remoteTokens);
     };
 
+    const fetchQuizResultsPayload = async (
+      context: StudentTokenAdminContext
+    ): Promise<Record<string, QuizResultByToken>> => {
+      try {
+        const query = new URLSearchParams({
+          session_id: context.sessionId,
+        });
+        const response = await fetch(`${base}/quiz/results?${query.toString()}`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${context.accessSignature}`,
+          },
+        });
+        const payload = await parseJsonResponse(response);
+        const rows: BackendQuizResultRow[] = Array.isArray(payload.results) ? payload.results : [];
+        return mapQuizResultsByToken(rows);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (isBackendAuthFailure(message)) {
+          throw error;
+        }
+        // Non-quiz sessions or unavailable quiz results should not fail monitor polling.
+        return {};
+      }
+    };
+
+    const fetchMonitorBundle = async (
+      context: StudentTokenAdminContext
+    ): Promise<{ monitorItems: AdminTokenMonitorItem[]; quizResultsMap: Record<string, QuizResultByToken> }> => {
+      const monitorItems = await fetchMonitorPayload(context);
+      const quizResultsMap = await fetchQuizResultsPayload(context);
+      return { monitorItems, quizResultsMap };
+    };
+
     let activeContext: StudentTokenAdminContext = {
       sessionId: adminBackendSessionId,
       accessSignature: adminBackendAccessSignature,
@@ -1149,8 +1718,16 @@ export default function App() {
     };
 
     try {
-      const mapped = await fetchMonitorPayload(activeContext);
-      setBackendMonitorItems(mapped);
+      const { monitorItems, quizResultsMap } = await fetchMonitorBundle(activeContext);
+      setBackendMonitorItems(monitorItems);
+      setQuizResultsByToken(quizResultsMap);
+      setSelectedMonitorToken((prev) => {
+        const normalizedPrev = prev.trim().toUpperCase();
+        if (normalizedPrev && monitorItems.some((item) => item.token.trim().toUpperCase() === normalizedPrev)) {
+          return prev;
+        }
+        return monitorItems[0]?.token ?? "";
+      });
       setBackendMonitorError("");
       return true;
     } catch (error) {
@@ -1163,8 +1740,19 @@ export default function App() {
         if (refreshedContext) {
           try {
             activeContext = refreshedContext;
-            const mapped = await fetchMonitorPayload(activeContext);
-            setBackendMonitorItems(mapped);
+            const { monitorItems, quizResultsMap } = await fetchMonitorBundle(activeContext);
+            setBackendMonitorItems(monitorItems);
+            setQuizResultsByToken(quizResultsMap);
+            setSelectedMonitorToken((prev) => {
+              const normalizedPrev = prev.trim().toUpperCase();
+              if (
+                normalizedPrev &&
+                monitorItems.some((item) => item.token.trim().toUpperCase() === normalizedPrev)
+              ) {
+                return prev;
+              }
+              return monitorItems[0]?.token ?? "";
+            });
             setBackendMonitorError("");
             return true;
           } catch (retryError) {
@@ -1334,13 +1922,15 @@ export default function App() {
 
   const bootstrapBackendAdminSession = async (
     expiryMinutes: number,
-    studentTokenCount = 1
+    studentTokenCount = 1,
+    requestedExamMode: SessionMode = "BROWSER_LOCKDOWN"
   ): Promise<{
     sessionId: string;
     studentTokens: string[];
     studentExpiresAt: number;
     adminAccessSignature: string;
     adminBindingId: string;
+    examMode: SessionMode;
   } | null> => {
     const base = normalizeBackendBaseUrl(backendBaseUrl);
     if (!base) {
@@ -1361,10 +1951,12 @@ export default function App() {
           proctor_id: "AdminID",
           token_count: requestedTokenCount,
           token_ttl_minutes: expiryMinutes,
+          exam_mode: requestedExamMode,
         }),
       });
       const created = await parseJsonResponse(createdResponse);
       const sessionIdFromApi = String(created.session_id ?? "");
+      const createdExamMode = normalizeExamModeValue(created.exam_mode);
       const createdTokens: string[] = Array.isArray(created.tokens) ? created.tokens : [];
       const studentTokens = createdTokens
         .filter((value) => String(value).toUpperCase().startsWith("S-"))
@@ -1402,6 +1994,7 @@ export default function App() {
         studentExpiresAt: Date.now() + expiryMinutes * 60 * 1000,
         adminAccessSignature: accessSignature,
         adminBindingId: String(claimed.device_binding_id ?? ""),
+        examMode: createdExamMode,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1469,6 +2062,7 @@ export default function App() {
     whitelist: string[];
     role: "student" | "admin";
     tokenExpiresAt: number | null;
+    examMode: SessionMode;
   }> => {
     const base = normalizeBackendBaseUrl(backendBaseUrl);
     if (!base) {
@@ -1505,6 +2099,7 @@ export default function App() {
     const tokenExpiresAtRaw = String(payload.token_expires_at ?? "").trim();
     const tokenExpiresAtParsed = tokenExpiresAtRaw ? Date.parse(tokenExpiresAtRaw) : NaN;
     const tokenExpiresAt = Number.isNaN(tokenExpiresAtParsed) ? null : tokenExpiresAtParsed;
+    const examMode = normalizeExamModeValue(payload.exam_mode);
 
     if (!accessSignature || !bindingId || !sessionIdFromApi) {
       throw new Error("Invalid backend claim response.");
@@ -1518,7 +2113,184 @@ export default function App() {
       whitelist,
       role: backendRole,
       tokenExpiresAt,
+      examMode,
     };
+  };
+
+  const registerStudentAccount = async () => {
+    const base = normalizeBackendBaseUrl(backendBaseUrl);
+    if (!base) {
+      setRegisterStatus(tr(language, "Backend belum terhubung.", "Backend is not connected."));
+      return;
+    }
+    setRegisterLoading(true);
+    try {
+      const response = await fetch(`${base}/student/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: registerNama.trim(),
+          class: registerKelas.trim(),
+          elective: registerJurusan.trim(),
+          username: registerUsername.trim(),
+          password: registerPassword,
+          school_year: registerSchoolYear.trim(),
+        }),
+      });
+      await parseJsonResponse(response);
+      setRegisterStatus(tr(language, "Registrasi berhasil. Silakan login.", "Registration successful. Please log in."));
+      setStudentLoginUsername(registerUsername.trim());
+      setStudentLoginPassword("");
+      setScreen("UserLogin");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRegisterStatus(message);
+    } finally {
+      setRegisterLoading(false);
+    }
+  };
+
+  const loginStudentAccount = async () => {
+    const base = normalizeBackendBaseUrl(backendBaseUrl);
+    if (!base) {
+      setStudentAuthStatus(tr(language, "Backend belum terhubung.", "Backend is not connected."));
+      return;
+    }
+    setStudentAuthLoading(true);
+    try {
+      const credentials = `${studentLoginUsername.trim()}:${studentLoginPassword}`;
+      const basicToken = encodeBasicAuth(credentials);
+      const response = await fetch(`${base}/student/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${basicToken}`,
+        },
+        body: JSON.stringify({
+          username: studentLoginUsername.trim(),
+          password: studentLoginPassword,
+        }),
+      });
+      const payload = await parseJsonResponse(response);
+      const token = String(payload.student_auth_token ?? "").trim();
+      const student = payload.student ?? {};
+      const account: StudentAccount = {
+        name: String(student.name ?? ""),
+        studentClass: String(student.class ?? ""),
+        elective: String(student.elective ?? ""),
+        username: String(student.username ?? ""),
+        schoolYear: String(student.school_year ?? ""),
+      };
+      if (!token) {
+        throw new Error("Student auth token missing.");
+      }
+      setStudentAuthToken(token);
+      setStudentAccount(account);
+      setStudentAuthStatus(tr(language, "Login siswa berhasil.", "Student login successful."));
+      addLog("Student authenticated via Basic Auth.");
+      setScreen("InAppQuizSelection");
+      await loadInAppQuizSessions(token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStudentAuthStatus(message);
+      addLog(`Student login failed: ${message}`);
+    } finally {
+      setStudentAuthLoading(false);
+    }
+  };
+
+  const loadInAppQuizSessions = async (tokenOverride?: string) => {
+    const base = normalizeBackendBaseUrl(backendBaseUrl);
+    const authToken = (tokenOverride ?? studentAuthToken).trim();
+    if (!base || !authToken) {
+      setInAppQuizStatus(tr(language, "Token siswa belum tersedia.", "Student token is not available."));
+      return;
+    }
+    try {
+      setInAppQuizStatus(tr(language, "Memuat daftar kuis...", "Loading quiz list..."));
+      const response = await fetch(`${base}/quiz/active-sessions`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const payload = await parseJsonResponse(response);
+      const sessions = Array.isArray(payload.sessions)
+        ? payload.sessions.map((item: any) => ({
+            sessionId: String(item.session_id ?? ""),
+            examName: String(item.exam_name ?? ""),
+            quizTitle: String(item.quiz_title ?? ""),
+            questionCount: Number(item.question_count ?? 0),
+            durationMinutes: Number(item.duration_minutes ?? 0),
+            status: String(item.status ?? ""),
+            startTime: String(item.start_time ?? ""),
+          }))
+        : [];
+      setInAppQuizSessions(sessions);
+      setInAppQuizStatus(
+        sessions.length > 0
+          ? tr(language, "Pilih kuis untuk memulai.", "Select a quiz to start.")
+          : tr(language, "Belum ada kuis aktif.", "No active quizzes yet.")
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setInAppQuizStatus(message);
+      addLog(`Load in-app quiz sessions failed: ${message}`);
+    }
+  };
+
+  const joinInAppQuizSession = async (session: InAppQuizSession) => {
+    const base = normalizeBackendBaseUrl(backendBaseUrl);
+    const authToken = studentAuthToken.trim();
+    if (!base || !authToken) {
+      setInAppQuizStatus(tr(language, "Token siswa belum tersedia.", "Student token is not available."));
+      return;
+    }
+    try {
+      setInAppQuizStatus(tr(language, "Menghubungkan ke sesi...", "Joining session..."));
+      const response = await fetch(`${base}/quiz/join`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          session_id: session.sessionId,
+          device_fingerprint: getRoleDeviceFingerprint("student"),
+          device_name: getRuntimeDeviceName("student"),
+        }),
+      });
+      const payload = await parseJsonResponse(response);
+      const accessSignature = String(payload.access_signature ?? "").trim();
+      const bindingId = String(payload.device_binding_id ?? "").trim();
+      const sessionIdFromApi = String(payload.session_id ?? session.sessionId).trim();
+      const token = String(payload.student_token ?? payload.token ?? "").trim();
+      const tokenExpiresAtRaw = String(payload.token_expires_at ?? "").trim();
+      const tokenExpiresAtParsed = tokenExpiresAtRaw ? Date.parse(tokenExpiresAtRaw) : NaN;
+      const tokenExpiresAt = Number.isNaN(tokenExpiresAtParsed) ? null : tokenExpiresAtParsed;
+      const examMode = normalizeExamModeValue(payload.exam_mode);
+
+      if (!accessSignature || !bindingId || !sessionIdFromApi) {
+        throw new Error("Invalid quiz join response.");
+      }
+
+      setRole("student");
+      setActiveAdminTokenKey("");
+      setActiveExamMode(examMode);
+      setActiveIssuedToken("");
+      setActiveStudentToken(token);
+      setStudentBackendAccessSignature(accessSignature);
+      setStudentBackendBindingId(bindingId);
+      setSessionId(sessionIdFromApi);
+      setSessionExpiresAt(
+        tokenExpiresAt ?? Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000
+      );
+      setSessionExpiryHandled(false);
+      setRiskScore(0);
+      setQuizEntryScreen("InAppQuizSelection");
+      setStatusMessage(tr(language, "Login siswa berhasil.", "Student login successful."));
+      addLog(`Student joined in-app quiz session: ${sessionIdFromApi}`);
+      setScreen("QuizStudentScreen");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setInAppQuizStatus(message);
+      addLog(`Join in-app quiz failed: ${message}`);
+    }
   };
 
   const claimTokenFromDeveloperPanel = async () => {
@@ -1543,6 +2315,7 @@ export default function App() {
       const roleHint: "student" | "admin" = normalizedToken.startsWith("A-") ? "admin" : "student";
       const claimed = await claimBackendSession(normalizedToken, roleHint);
       const resolvedRole: IssuedTokenRole = claimed.role === "admin" ? "admin" : "student";
+      setActiveExamMode(claimed.examMode);
       const expiresAt =
         claimed.tokenExpiresAt ?? Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000;
 
@@ -1640,27 +2413,12 @@ export default function App() {
     setScreen("Settings");
   };
 
-  const clearAdminWorkspaceState = () => {
-    setGeneratedToken("");
-    setGeneratedTokenExpiryAt("");
-    setGeneratedTokenBatch([]);
-    setTokenBatchCount("1");
-    setIssuedTokens([]);
-    setTokenPinPolicies({});
-    setTokenLaunchPolicies({});
-    setTokenLaunchUrlInput("");
-    setProctorPin("4321");
-    setProctorPinEffectiveDate("");
-    setAdminBackendSessionId("");
-    setAdminBackendAccessSignature("");
-    setAdminBackendBindingId("");
-    setStudentTokenAdminContexts({});
-    setBackendMonitorItems([]);
-    setBackendMonitorError("");
-    setRevokeTokenInput("");
-    setRevokeTokenStatus(tr(language, "Masukkan token siswa untuk revoke.", "Enter a student token to revoke."));
-    setSessionControlStatus(tr(language, "Kontrol sesi siap.", "Session control ready."));
-    runSecurityCall(() => securityModule?.clearAdminWorkspaceCache?.());
+  const clearAdminWorkspaceState = (options?: { clearCache?: boolean }) => {
+    resetAdminWorkspaceState();
+    if (options?.clearCache) {
+      setActiveAdminTokenKey("");
+      clearAdminWorkspaceCache();
+    }
   };
 
   const logoutToLogin = (options?: { clearAdminWorkspace?: boolean }) => {
@@ -1670,10 +2428,29 @@ export default function App() {
     runSecurityCall(() => securityModule?.stopHeartbeat?.());
     runSecurityCall(() => securityModule?.clearSession?.());
     setRole("guest");
+    setActiveAdminTokenKey("");
+    setActiveExamMode("BROWSER_LOCKDOWN");
     setTokenInput("");
     setActiveStudentToken("");
     setStudentBackendAccessSignature("");
     setStudentBackendBindingId("");
+    setStudentAuthToken("");
+    setStudentAccount(null);
+    setStudentLoginUsername("");
+    setStudentLoginPassword("");
+    setStudentAuthStatus(tr(language, "Masukkan kredensial siswa.", "Enter student credentials."));
+    setStudentAuthLoading(false);
+    setRegisterNama("");
+    setRegisterKelas("");
+    setRegisterJurusan("");
+    setRegisterUsername("");
+    setRegisterPassword("");
+    setRegisterSchoolYear("");
+    setRegisterStatus(tr(language, "Lengkapi data registrasi siswa.", "Complete student registration data."));
+    setRegisterLoading(false);
+    setInAppQuizSessions([]);
+    setInAppQuizStatus(tr(language, "Sinkronisasi daftar kuis.", "Syncing quiz list."));
+    setQuizEntryScreen("ExamSelectionScreen");
     setBypassWhitelist(false);
     setPinAttempt("");
     setSessionExpiresAt(null);
@@ -1690,13 +2467,39 @@ export default function App() {
       )
     );
     setDeveloperUnlocked(false);
-    setDeveloperOrigin("LoginScreen");
+    setDeveloperOrigin("TokenLogin");
     setDeveloperClaimTokenInput("");
     if (clearAdminWorkspace) {
-      clearAdminWorkspaceState();
+      clearAdminWorkspaceState({ clearCache: true });
     }
     setStatusMessage(tr(language, "Masukkan token sesi untuk melanjutkan.", "Enter session token to continue."));
-    setScreen("LoginScreen");
+    setScreen("LoginSelection");
+  };
+
+  const clearAdminWorkspaceFromLogin = () => {
+    Alert.alert(
+      tr(language, "Hapus cache admin?", "Clear admin cache?"),
+      tr(
+        language,
+        "Semua data admin tersimpan lokal akan dihapus dari perangkat ini.",
+        "All locally cached admin data will be removed from this device."
+      ),
+      [
+        { text: tr(language, "Batal", "Cancel"), style: "cancel" },
+        {
+          text: tr(language, "Hapus", "Clear"),
+          style: "destructive",
+          onPress: () => {
+            setActiveAdminTokenKey("");
+            clearAdminWorkspaceState({ clearCache: true });
+            setStatusMessage(
+              tr(language, "Cache admin berhasil dibersihkan.", "Admin cache cleared.")
+            );
+            addLog("Admin workspace cache cleared from login screen.");
+          },
+        },
+      ]
+    );
   };
 
   const openExamFlow = (rawUrl: string, source: string, bypass = false) => {
@@ -1752,8 +2555,12 @@ export default function App() {
 
   const handleLogin = async () => {
     const token = tokenInput.trim();
+    setStudentAuthToken("");
+    setStudentAccount(null);
     if (token === STUDENT_TOKEN) {
       setRole("student");
+      setActiveAdminTokenKey("");
+      setActiveExamMode("BROWSER_LOCKDOWN");
       setActiveIssuedToken("");
       setActiveStudentToken(token.toUpperCase());
       setStudentBackendAccessSignature("");
@@ -1769,7 +2576,10 @@ export default function App() {
     }
 
     if (token === ADMIN_TOKEN) {
+      const adminTokenKey = normalizeAdminTokenKey(token);
       setRole("admin");
+      activateAdminWorkspace(adminTokenKey);
+      setActiveExamMode("BROWSER_LOCKDOWN");
       setActiveIssuedToken("");
       setActiveStudentToken("");
       setStudentBackendAccessSignature("");
@@ -1780,12 +2590,15 @@ export default function App() {
       setRiskScore(0);
       setStatusMessage(tr(language, "Login admin/proktor berhasil.", "Admin/proctor login successful."));
       addLog("Admin authenticated using AdminID.");
+      activateAdminWorkspace(adminTokenKey);
       setScreen("AdminDashboardPanel");
       return;
     }
 
     if (token === DEVELOPER_PASSWORD) {
       setRole("developer");
+      setActiveAdminTokenKey("");
+      setActiveExamMode("BROWSER_LOCKDOWN");
       setActiveIssuedToken("");
       setActiveStudentToken("");
       setStudentBackendAccessSignature("");
@@ -1794,7 +2607,7 @@ export default function App() {
       setSessionExpiresAt(Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000);
       setSessionExpiryHandled(false);
       setRiskScore(0);
-      setDeveloperOrigin("LoginScreen");
+      setDeveloperOrigin("TokenLogin");
       setDeveloperUnlocked(true);
       setStatusMessage(tr(language, "Akses developer diberikan.", "Developer access granted."));
       addLog("Developer authenticated using EDU_DEV_ACCESS.");
@@ -1814,6 +2627,12 @@ export default function App() {
           claimed.tokenExpiresAt ?? Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000;
 
         setRole(resolvedRole);
+        if (resolvedRole === "admin") {
+          activateAdminWorkspace(tokenKey, { preserveBackendSession: true });
+        } else {
+          setActiveAdminTokenKey("");
+        }
+        setActiveExamMode(claimed.examMode);
         setActiveIssuedToken(tokenKey);
         setActiveStudentToken(resolvedRole === "student" ? tokenKey : "");
         setStudentBackendAccessSignature(resolvedRole === "student" ? claimed.accessSignature : "");
@@ -1872,7 +2691,14 @@ export default function App() {
           )
         );
         addLog(`Backend token claim success: token=${tokenKey} role=${resolvedRole} session=${claimed.sessionId}`);
-        setScreen(resolvedRole === "admin" ? "AdminDashboardPanel" : "ExamSelectionScreen");
+        if (resolvedRole === "admin") {
+          setScreen("AdminDashboardPanel");
+        } else if (claimed.examMode === "IN_APP_QUIZ") {
+          setQuizEntryScreen("ExamSelectionScreen");
+          setScreen("QuizStudentScreen");
+        } else {
+          setScreen("ExamSelectionScreen");
+        }
         return;
       } catch (error) {
         const backendClaimError = error instanceof Error ? error.message : String(error);
@@ -1911,7 +2737,9 @@ export default function App() {
       }
 
       const resolvedRole: Role = issued.role === "admin" ? "admin" : "student";
+      let issuedExamMode: SessionMode = "BROWSER_LOCKDOWN";
       setRole(resolvedRole);
+      setActiveExamMode("BROWSER_LOCKDOWN");
       setActiveIssuedToken(token.toUpperCase());
       setActiveStudentToken(resolvedRole === "student" ? token.toUpperCase() : "");
       setStudentBackendAccessSignature("");
@@ -1926,6 +2754,11 @@ export default function App() {
         deviceName: resolvedRole === "admin" ? "Proctor Console" : "Android Student Device",
         lastSeenAt: Date.now(),
       });
+      if (resolvedRole === "admin") {
+        activateAdminWorkspace(token);
+      } else {
+        setActiveAdminTokenKey("");
+      }
       if (resolvedRole === "student") {
         const tokenKey = token.toUpperCase();
         const boundUrl = tokenLaunchPolicies[tokenKey]?.url;
@@ -1938,6 +2771,8 @@ export default function App() {
             setStudentBackendAccessSignature(claimed.accessSignature);
             setStudentBackendBindingId(claimed.bindingId);
             setSessionId(claimed.sessionId);
+            setActiveExamMode(claimed.examMode);
+            issuedExamMode = claimed.examMode;
             if (claimed.whitelist.length > 0) {
               setWhitelist(Array.from(new Set(claimed.whitelist)));
             }
@@ -1972,7 +2807,14 @@ export default function App() {
         )
       );
       addLog(`Issued ${issued.role} token authenticated (${issued.source}): ${token}`);
-      setScreen(resolvedRole === "admin" ? "AdminDashboardPanel" : "ExamSelectionScreen");
+      if (resolvedRole === "admin") {
+        setScreen("AdminDashboardPanel");
+      } else if (issuedExamMode === "IN_APP_QUIZ") {
+        setQuizEntryScreen("ExamSelectionScreen");
+        setScreen("QuizStudentScreen");
+      } else {
+        setScreen("ExamSelectionScreen");
+      }
       return;
     }
 
@@ -2225,26 +3067,158 @@ export default function App() {
       lastSeenLabel: formatTimestamp(entry.lastSeenAt),
     }));
   const hasBackendMonitorContext = Boolean(adminBackendSessionId && adminBackendAccessSignature);
-  const tokenMonitorItems: AdminTokenMonitorItem[] =
-    hasBackendMonitorContext ? backendMonitorItems : localTokenMonitorItems;
+  const tokenMonitorItems: AdminTokenMonitorItem[] = hasBackendMonitorContext
+    ? (() => {
+        const backendKeys = new Set(
+          backendMonitorItems.map((item) => item.token.trim().toUpperCase())
+        );
+        const merged = [...backendMonitorItems];
+        localTokenMonitorItems.forEach((item) => {
+          const normalizedToken = item.token.trim().toUpperCase();
+          if (!backendKeys.has(normalizedToken)) {
+            merged.push(item);
+          }
+        });
+        return merged;
+      })()
+    : localTokenMonitorItems;
+
+  useEffect(() => {
+    if (tokenMonitorItems.length === 0) {
+      if (selectedMonitorToken) {
+        setSelectedMonitorToken("");
+      }
+      return;
+    }
+    const normalizedSelected = selectedMonitorToken.trim().toUpperCase();
+    if (
+      normalizedSelected &&
+      tokenMonitorItems.some((item) => item.token.trim().toUpperCase() === normalizedSelected)
+    ) {
+      return;
+    }
+    setSelectedMonitorToken(tokenMonitorItems[0].token);
+  }, [selectedMonitorToken, tokenMonitorItems]);
+
+  const selectedMonitorTokenKey = selectedMonitorToken.trim().toUpperCase();
+  const selectedMonitorItem =
+    tokenMonitorItems.find((item) => item.token.trim().toUpperCase() === selectedMonitorTokenKey) ?? null;
+  const selectedMonitorPinPolicy = selectedMonitorItem
+    ? getTokenPinPolicy(tokenPinPolicies, selectedMonitorItem.token)
+    : undefined;
+  const selectedMonitorLaunchUrl = selectedMonitorItem
+    ? getTokenLaunchUrl(tokenLaunchPolicies, selectedMonitorItem.token) ?? ""
+    : "";
+  const selectedMonitorLaunchPolicyUpdatedAt = selectedMonitorItem
+    ? getTokenLaunchPolicyLabel(tokenLaunchPolicies, selectedMonitorItem.token)
+    : "";
+  const selectedMonitorQuizResult = selectedMonitorItem
+    ? quizResultsByToken[selectedMonitorItem.token.trim().toUpperCase()] ?? null
+    : null;
+  const selectedMonitorDetail: AdminTokenMonitorDetail | null = selectedMonitorItem
+    ? {
+        token: selectedMonitorItem.token,
+        role: selectedMonitorItem.role,
+        status: selectedMonitorItem.status,
+        ipAddress: selectedMonitorItem.ipAddress,
+        deviceName: selectedMonitorItem.deviceName,
+        expiresAtLabel: selectedMonitorItem.expiresAtLabel,
+        lastSeenLabel: selectedMonitorItem.lastSeenLabel,
+        proctorPin: selectedMonitorPinPolicy?.pin ?? "",
+        pinEffectiveDate: selectedMonitorPinPolicy?.effectiveDate ?? "",
+        launchUrl: selectedMonitorLaunchUrl,
+        launchUpdatedAt: selectedMonitorLaunchPolicyUpdatedAt,
+        quizResult: selectedMonitorQuizResult,
+      }
+    : null;
 
   if (screen === "SplashScreen") {
     return <SplashScreen bootMessage={bootMessage} language={language} />;
   }
 
-  if (screen === "LoginScreen") {
+  if (screen === "LoginSelection") {
     return (
-      <LoginScreen
+      <LoginSelection
+        language={language}
+        onTokenLogin={() => setScreen("TokenLogin")}
+        onQuizLogin={() => setScreen("UserLogin")}
+        onOpenSettings={() => openSettingsFrom("LoginSelection")}
+      />
+    );
+  }
+
+  if (screen === "TokenLogin") {
+    return (
+      <TokenLogin
         language={language}
         token={tokenInput}
         statusMessage={statusMessage}
         onTokenChange={setTokenInput}
         onSubmit={handleLogin}
-        onOpenSettings={() => openSettingsFrom("LoginScreen")}
+        onOpenSettings={() => openSettingsFrom("TokenLogin")}
+        onClearAdminCache={clearAdminWorkspaceFromLogin}
         onExitApp={() => {
           runSecurityCall(() => securityModule?.exitApp?.());
           BackHandler.exitApp();
         }}
+      />
+    );
+  }
+
+  if (screen === "UserLogin") {
+    return (
+      <UserLogin
+        language={language}
+        username={studentLoginUsername}
+        password={studentLoginPassword}
+        statusMessage={studentAuthStatus}
+        loading={studentAuthLoading}
+        onUsernameChange={setStudentLoginUsername}
+        onPasswordChange={setStudentLoginPassword}
+        onSubmit={() => void loginStudentAccount()}
+        onRegister={() => setScreen("Register")}
+        onBack={() => setScreen("LoginSelection")}
+      />
+    );
+  }
+
+  if (screen === "Register") {
+    return (
+      <Register
+        language={language}
+        nama={registerNama}
+        kelas={registerKelas}
+        jurusan={registerJurusan}
+        username={registerUsername}
+        password={registerPassword}
+        schoolYear={registerSchoolYear}
+        statusMessage={registerStatus}
+        loading={registerLoading}
+        onNamaChange={setRegisterNama}
+        onKelasChange={setRegisterKelas}
+        onJurusanChange={setRegisterJurusan}
+        onUsernameChange={setRegisterUsername}
+        onPasswordChange={setRegisterPassword}
+        onSchoolYearChange={setRegisterSchoolYear}
+        onSubmit={() => void registerStudentAccount()}
+        onBack={() => setScreen("UserLogin")}
+      />
+    );
+  }
+
+  if (screen === "InAppQuizSelection") {
+    return (
+      <InAppQuizSelection
+        language={language}
+        sessions={inAppQuizSessions}
+        statusMessage={inAppQuizStatus}
+        onSelectSession={(session) => void joinInAppQuizSession(session)}
+        onRefresh={() => void loadInAppQuizSessions()}
+        onLogout={() => {
+          addLog("Student logged out (in-app quiz).");
+          logoutToLogin();
+        }}
+        onOpenSettings={() => openSettingsFrom("InAppQuizSelection")}
       />
     );
   }
@@ -2255,11 +3229,34 @@ export default function App() {
         language={language}
         onScanQr={() => setScreen("QRScannerScreen")}
         onManualInput={() => setScreen("ManualInputScreen")}
+        onOpenQuiz={() => {
+          setQuizEntryScreen("ExamSelectionScreen");
+          setScreen("QuizStudentScreen");
+        }}
+        showQuizOption={activeExamMode === "HYBRID" || activeExamMode === "IN_APP_QUIZ"}
         onLogout={() => {
           addLog("Student logged out.");
           logoutToLogin();
         }}
         onOpenSettings={() => openSettingsFrom("ExamSelectionScreen")}
+      />
+    );
+  }
+
+  if (screen === "QuizStudentScreen") {
+    return (
+      <QuizStudentScreen
+        language={language}
+        backendBaseUrl={backendBaseUrl}
+        sessionId={sessionId}
+        accessSignature={studentBackendAccessSignature}
+        onLog={addLog}
+        onBack={() => setScreen(quizEntryScreen)}
+        showIntegrityWarning={showIntegrityWarning}
+        integrityMessage={integrityMessage}
+        onDismissIntegrityWarning={() => setShowIntegrityWarning(false)}
+        studentAccount={studentAccount}
+        studentToken={activeStudentToken}
       />
     );
   }
@@ -2504,6 +3501,7 @@ export default function App() {
       <AdminDashboardPanel
         language={language}
         backendBaseUrl={backendBaseUrl}
+        sessionMode={sessionMode}
         generatedToken={generatedToken}
         generatedTokenExpiryAt={generatedTokenExpiryAt}
         tokenBatchCount={tokenBatchCount}
@@ -2518,9 +3516,19 @@ export default function App() {
         sessionControlStatus={sessionControlStatus}
         backendMonitorError={backendMonitorError}
         tokenMonitorItems={tokenMonitorItems}
+        selectedMonitorToken={selectedMonitorToken}
+        selectedMonitorDetail={selectedMonitorDetail}
         logs={logs}
         onTabChange={setAdminDashboardTab}
+        onSelectMonitorToken={(token: string) => {
+          const normalized = token.trim().toUpperCase();
+          if (!normalized) {
+            return;
+          }
+          setSelectedMonitorToken(normalized);
+        }}
         onTokenBatchCountChange={setTokenBatchCount}
+        onSessionModeChange={setSessionMode}
         onTokenExpiryMinutesChange={setTokenExpiryMinutes}
         onTokenLaunchUrlChange={setTokenLaunchUrlInput}
         onSaveTokenLaunchUrl={async () => {
@@ -2977,7 +3985,7 @@ export default function App() {
             setSessionControlStatus(
               tr(language, "Session berhasil dihentikan.", "Session stopped successfully.")
             );
-            logoutToLogin({ clearAdminWorkspace: true });
+            logoutToLogin();
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             setSessionControlStatus(
@@ -3006,9 +4014,9 @@ export default function App() {
           if (hasBackendTarget) {
             setGeneratedToken("");
             setGeneratedTokenExpiryAt("");
-            setGeneratedTokenBatch([]);
 
-            const remote = await bootstrapBackendAdminSession(expiryMinutes, batchCount);
+            const remote = await bootstrapBackendAdminSession(expiryMinutes, batchCount, sessionMode);
+            const remoteExamMode: SessionMode = remote?.examMode ?? "BROWSER_LOCKDOWN";
             const generated: GeneratedBatchRuntimeItem[] = remote
               ? remote.studentTokens.map((token) => ({
                   token,
@@ -3045,7 +4053,7 @@ export default function App() {
             }));
             const generatedTokenSet = new Set(generated.map((entry) => entry.token.toUpperCase()));
 
-            setGeneratedTokenBatch(generatedBatchLabels);
+            setGeneratedTokenBatch((prev) => mergeGeneratedTokenBatch(prev, generatedBatchLabels));
             setGeneratedToken(primaryToken.token);
             setGeneratedTokenExpiryAt(formatTimestamp(primaryToken.expiresAt));
             if (primaryToken.sessionId) {
@@ -3056,6 +4064,7 @@ export default function App() {
               setAdminBackendAccessSignature(primaryToken.adminAccessSignature);
               setAdminBackendBindingId(primaryToken.adminBindingId ?? "");
             }
+            setActiveExamMode(remoteExamMode);
             setStudentTokenAdminContexts((prev) => {
               const next: Record<string, StudentTokenAdminContext> = { ...prev };
               generated.forEach((entry) => {
@@ -3102,7 +4111,7 @@ export default function App() {
             });
             await loadAdminMonitor();
             addLog(
-              `Backend student token batch generated: requested=${batchCount} issued=${generated.length} | ttl=${expiryMinutes}m`
+              `Backend student token batch generated: requested=${batchCount} issued=${generated.length} | mode=${remoteExamMode} | ttl=${expiryMinutes}m`
             );
             if (generated.length < batchCount) {
               addLog(
@@ -3132,9 +4141,10 @@ export default function App() {
           }));
           const primaryToken = generated[generated.length - 1];
 
-          setGeneratedTokenBatch(generatedBatchLabels);
+          setGeneratedTokenBatch((prev) => mergeGeneratedTokenBatch(prev, generatedBatchLabels));
           setGeneratedToken(primaryToken.token);
           setGeneratedTokenExpiryAt(formatTimestamp(primaryToken.expiresAt));
+          setActiveExamMode(sessionMode);
           setStudentTokenAdminContexts((prev) => {
             const next = { ...prev };
             generated.forEach((entry) => {
@@ -3159,7 +4169,7 @@ export default function App() {
             return next;
           });
           addLog(
-            `Admin generated local student token batch: count=${generated.length} | ttl=${expiryMinutes}m`
+            `Admin generated local student token batch: count=${generated.length} | mode=${sessionMode} | ttl=${expiryMinutes}m`
           );
           setSessionControlStatus(
             tr(
@@ -3213,6 +4223,7 @@ export default function App() {
           addLog(`Active student token selected: ${normalized}`);
         }}
         onOpenWhitelist={() => setScreen("URLWhitelist")}
+        onOpenQuizBuilder={() => setScreen("QuizTeacherScreen")}
         onOpenHistory={() => setScreen("HistoryScreen")}
         onOpenSettings={() => openSettingsFrom("AdminDashboardPanel")}
         onLogout={() => {
@@ -3220,6 +4231,35 @@ export default function App() {
           markActiveIssuedTokenOffline();
           logoutToLogin();
         }}
+      />
+    );
+  }
+
+  if (screen === "QuizTeacherScreen") {
+    return (
+      <QuizTeacherScreen
+        language={language}
+        backendBaseUrl={backendBaseUrl}
+        sessionId={adminBackendSessionId}
+        accessSignature={adminBackendAccessSignature}
+        onLog={addLog}
+        onOpenQuestionBuilder={() => setScreen("QuizQuestionBuilderScreen")}
+        onBack={() => setScreen("AdminDashboardPanel")}
+      />
+    );
+  }
+
+  if (screen === "QuizQuestionBuilderScreen") {
+    return (
+      <QuizQuestionBuilderScreen
+        language={language}
+        backendBaseUrl={backendBaseUrl}
+        sessionId={adminBackendSessionId}
+        accessSignature={adminBackendAccessSignature}
+        cache={quizBuilderCache}
+        onCacheChange={setQuizBuilderCache}
+        onLog={addLog}
+        onBack={() => setScreen("QuizTeacherScreen")}
       />
     );
   }
@@ -3358,35 +4398,95 @@ export default function App() {
         adminToken={generatedAdminToken}
         adminTokenExpiryAt={generatedAdminTokenExpiryAt}
         adminTokenExpiryMinutes={adminTokenExpiryMinutes}
+        adminTokenBatchCount={adminTokenBatchCount}
         onAdminTokenExpiryMinutesChange={setAdminTokenExpiryMinutes}
+        onAdminTokenBatchCountChange={setAdminTokenBatchCount}
+        adminTokenBatch={adminGeneratedTokenBatch}
         onGenerateAdminToken={async () => {
           if (!developerUnlocked) {
             addLog("Generate admin token blocked: developer panel locked.");
             return;
           }
           const expiryMinutes = parseExpiryMinutes(adminTokenExpiryMinutes);
+          const batchCount = parseAdminTokenBatchCount(adminTokenBatchCount);
           const hasBackendTarget = Boolean(normalizeBackendBaseUrl(backendBaseUrl));
 
           if (hasBackendTarget) {
             setGeneratedAdminToken("");
             setGeneratedAdminTokenExpiryAt("");
-            const remoteAdmin = await createBackendAdminToken(expiryMinutes);
-            if (!remoteAdmin) {
-              addLog("Developer backend admin token generation failed.");
-              return;
-            }
+            let lastToken = "";
+            let lastExpiry = "";
+            for (let index = 0; index < batchCount; index += 1) {
+              if (index > 0) {
+                await delay(50);
+              }
+              const remoteAdmin = await createBackendAdminToken(expiryMinutes);
+              if (!remoteAdmin) {
+                addLog("Developer backend admin token generation failed.");
+                return;
+              }
 
-            setGeneratedAdminToken(remoteAdmin.adminToken);
-            setGeneratedAdminTokenExpiryAt(formatTimestamp(remoteAdmin.adminExpiresAt));
-            setIssuedTokens((prev) => {
-              const next = prev.filter(
-                (entry) => entry.token.toUpperCase() !== remoteAdmin.adminToken.toUpperCase()
+              lastToken = remoteAdmin.adminToken;
+              lastExpiry = formatTimestamp(remoteAdmin.adminExpiresAt);
+              setGeneratedAdminToken(remoteAdmin.adminToken);
+              setGeneratedAdminTokenExpiryAt(lastExpiry);
+              setAdminGeneratedTokenBatch((prev) =>
+                mergeGeneratedTokenBatch(prev, [
+                  { token: remoteAdmin.adminToken, expiresAt: lastExpiry },
+                ])
               );
+              setIssuedTokens((prev) => {
+                const next = prev.filter(
+                  (entry) => entry.token.toUpperCase() !== remoteAdmin.adminToken.toUpperCase()
+                );
+                next.push({
+                  token: remoteAdmin.adminToken,
+                  role: "admin",
+                  expiresAt: remoteAdmin.adminExpiresAt,
+                  source: "backend-session",
+                  status: "issued",
+                  ipAddress: "-",
+                  deviceName: tr(language, "Belum login", "Not logged in"),
+                  lastSeenAt: Date.now(),
+                });
+                return next;
+              });
+              if (batchCount === 1) {
+                addLog(
+                  `Developer generated backend admin token: ${remoteAdmin.adminToken} | session=${remoteAdmin.sessionId} | ttl=${expiryMinutes}m | exp=${lastExpiry}`
+                );
+              }
+            }
+            if (batchCount > 1 && lastToken) {
+              addLog(
+                `Developer generated ${batchCount} backend admin tokens. last=${lastToken} | ttl=${expiryMinutes}m | exp=${lastExpiry}`
+              );
+            }
+            return;
+          }
+
+          let lastToken = "";
+          let lastExpiry = "";
+          for (let index = 0; index < batchCount; index += 1) {
+            if (index > 0) {
+              await delay(50);
+            }
+            const token = generateAdminToken();
+            const expiresAt = Date.now() + expiryMinutes * 60 * 1000;
+            lastToken = token;
+            lastExpiry = formatTimestamp(expiresAt);
+            setGeneratedAdminToken(token);
+            setGeneratedAdminTokenExpiryAt(lastExpiry);
+            setAdminGeneratedTokenBatch((prev) =>
+              mergeGeneratedTokenBatch(prev, [{ token, expiresAt: lastExpiry }])
+            );
+            setIssuedTokens((prev) => {
+              const next = prev.filter((entry) => entry.token.toUpperCase() !== token.toUpperCase());
               next.push({
-                token: remoteAdmin.adminToken,
+                token,
                 role: "admin",
-                expiresAt: remoteAdmin.adminExpiresAt,
-                source: "backend-session",
+                expiresAt,
+                source: "developer-panel",
                 status: "issued",
                 ipAddress: "-",
                 deviceName: tr(language, "Belum login", "Not logged in"),
@@ -3394,33 +4494,29 @@ export default function App() {
               });
               return next;
             });
+            if (batchCount === 1) {
+              addLog(
+                `Developer generated LOCAL admin token (not backend): ${token} | ttl=${expiryMinutes}m | exp=${lastExpiry}`
+              );
+            }
+          }
+          if (batchCount > 1 && lastToken) {
             addLog(
-              `Developer generated backend admin token: ${remoteAdmin.adminToken} | session=${remoteAdmin.sessionId} | ttl=${expiryMinutes}m | exp=${formatTimestamp(remoteAdmin.adminExpiresAt)}`
+              `Developer generated ${batchCount} LOCAL admin tokens (not backend). last=${lastToken} | ttl=${expiryMinutes}m | exp=${lastExpiry}`
             );
+          }
+        }}
+        onCopyAllAdminTokens={() => {
+          if (adminGeneratedTokenBatch.length === 0) {
+            addLog("Copy all admin tokens ignored: batch list is empty.");
             return;
           }
-
-          const token = generateAdminToken();
-          const expiresAt = Date.now() + expiryMinutes * 60 * 1000;
-          setGeneratedAdminToken(token);
-          setGeneratedAdminTokenExpiryAt(formatTimestamp(expiresAt));
-          setIssuedTokens((prev) => {
-            const next = prev.filter((entry) => entry.token.toUpperCase() !== token.toUpperCase());
-            next.push({
-              token,
-              role: "admin",
-              expiresAt,
-              source: "developer-panel",
-              status: "issued",
-              ipAddress: "-",
-              deviceName: tr(language, "Belum login", "Not logged in"),
-              lastSeenAt: Date.now(),
-            });
-            return next;
-          });
-          addLog(
-            `Developer generated LOCAL admin token (not backend): ${token} | ttl=${expiryMinutes}m | exp=${formatTimestamp(expiresAt)}`
-          );
+          const payload = adminGeneratedTokenBatch.map((entry) => entry.token).join("\n");
+          if (!safeCopyToClipboard(payload)) {
+            addLog("Copy all admin tokens failed: clipboard module unavailable.");
+            return;
+          }
+          addLog(`Batch admin tokens copied to clipboard: count=${adminGeneratedTokenBatch.length}`);
         }}
         onCopyAdminToken={() => {
           if (!generatedAdminToken) {
@@ -3455,6 +4551,15 @@ export default function App() {
           if (role === "guest") {
             setStatusMessage(
               tr(nextLanguage, "Masukkan token sesi untuk melanjutkan.", "Enter session token to continue.")
+            );
+            setStudentAuthStatus(
+              tr(nextLanguage, "Masukkan kredensial siswa.", "Enter student credentials.")
+            );
+            setRegisterStatus(
+              tr(nextLanguage, "Lengkapi data registrasi siswa.", "Complete student registration data.")
+            );
+            setInAppQuizStatus(
+              tr(nextLanguage, "Sinkronisasi daftar kuis.", "Syncing quiz list.")
             );
           }
           setPinStatus(

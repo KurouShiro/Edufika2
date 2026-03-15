@@ -91,6 +91,7 @@ Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aks
 * Settings.tsx
 * Keypad.tsx
 * Layout.tsx
+* QuizQuestionBuilderScreen.tsx
 * **LiveStatusOverlay.tsx (Watermark + Session Info Overlay)**
 * **IntegrityWarningModal.tsx (Peringatan otomatis jika perilaku mencurigakan)**
 * **LoginScreen.tsx (Exit button tersedia sebelum login untuk shutdown app terkontrol)**
@@ -102,6 +103,8 @@ Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aks
 * **AdminDashboardPanel.tsx (Tap-select active token pada batch list agar URL/PIN bisa diarahkan ke token terpilih)**
 * **AdminDashboardPanel.tsx (Monitor tab: pause/resume/reissue signature controls terhubung ke backend)**
 * **AdminDashboardPanel.tsx (Monitor tab: daftar token + status + IP + nama perangkat)**
+* **AdminDashboardPanel.tsx + App.tsx (Monitor tab menggabungkan data backend + cache lokal agar token batch lama tidak hilang setelah generate batch baru)**
+* **AdminDashboardPanel.tsx (Status token `REVOKED` ditampilkan konsisten setelah revoke siswa)**
 * **AdminDashboardPanel.tsx (Token URL binding sinkron ke backend whitelist + backend launch URL)**
 * **AdminDashboardPanel.tsx (Bulk URL binding + bulk PIN binding ke seluruh token batch dalam satu aksi)**
 * **DeveloperAccessScreen.tsx (Generate admin token + expiry + copy)**
@@ -113,6 +116,7 @@ Design UI Minimalist yang rapi dan simple, memiliki estetika pemrograman dan aks
 * **App.tsx (Validasi whitelist menyertakan fallback token-bound URL + log `bound URL`)**
 * **App.tsx (Lazy-loading `QRScannerScreen` dan `ExamBrowserScreen` agar startup RN lebih stabil di release)**
 * **App.tsx (Claim backend `S-/A-` langsung hydrate `launch_url` + `whitelist` ke state RN untuk multi-device consistency)**
+* **QuizQuestionBuilderScreen.tsx (Builder soal dinamis: proktor set jumlah soal, form per-soal muncul otomatis, tipe soal bisa ditoggle, submit bulk ke backend, lalu assign token dari layar yang sama)**
 * **Admin dashboard layout scrollable penuh untuk layar kecil + logout button selalu dapat diakses**
 * **QRScannerScreen.tsx (Menggunakan CameraX QR scanner native via bridge, kompatibel Android 9+)**
 
@@ -231,12 +235,66 @@ Bukan sekadar authentication server.
 * Mendukung reconnect signature (`/session/reconnect`) untuk recovery signature/admin control tanpa membuat sesi baru
 * Menyediakan kontrol sesi live dari proktor: pause/resume/reissue signature/revoke student
 * Menyediakan endpoint monitor token realtime (status online/offline/revoked/expired + ip/device)
+* Status monitor backend memprioritaskan lock/revoke state agar token revoke tidak tertutup oleh status expired
 * Timeout heartbeat mengunci binding siswa yang stale tanpa mematikan seluruh sesi
 * Fokus pada session authority + launch URL host pihak ketiga (tanpa menyimpan bank soal lokal)
 * Mencatat seluruh aktivitas audit
 * Auto-archive + cleanup sesi selesai/revoke ke `session_cleanup_audit`
 * Live revoke session oleh proktor
 * Siap dikontainerisasi untuk deployment (`Dockerfile` + `docker-compose.yml`)
+
+---
+
+## Database Schema & Flow (MySQL/MariaDB)
+
+### Tabel Inti (Session Authority)
+
+* `exam_sessions` (metadata sesi + status + `exam_mode` + waktu start/end)
+* `session_tokens` (token per sesi: admin + banyak siswa, role, claimed_at, expires_at)
+* `device_bindings` (binding token->device, fingerprint, IP, device_name, signature_version, risk_score, lock, last_seen)
+* `heartbeats` (telemetry periodik per binding)
+* `violations` (event pelanggaran per binding)
+* `session_whitelist` (URL whitelist per sesi)
+* `session_browser_targets` (launch URL + provider + lock_to_host per sesi)
+* `session_proctor_pins` (PIN proktor per binding, efektif per hari)
+* `session_student_pin_templates` (template PIN proktor per student token, efektif per hari)
+* `session_cleanup_audit` (arsip sesi selesai/revoke)
+
+### Flow Admin (DB)
+
+* Proktor membuat sesi -> `exam_sessions`
+* Generate token admin + siswa -> `session_tokens`
+* Admin claim token -> `device_bindings` (role admin)
+* Set launch URL -> `session_browser_targets`
+* Set whitelist -> `session_whitelist`
+* Set Proctor PIN per token -> `session_student_pin_templates`
+* Apply PIN per binding siswa -> `session_proctor_pins`
+* Monitoring -> `device_bindings` + `heartbeats` + `violations`
+
+### Flow Student (DB)
+
+* Siswa claim token -> update `session_tokens.claimed` + `device_bindings`
+* Heartbeat -> `heartbeats` + update `device_bindings.last_seen_at`
+* Violation -> `violations`
+* Whitelist/launch -> `session_whitelist` + `session_browser_targets`
+
+### Flow In-App Quiz (Exam Mode)
+
+* `exam_sessions.exam_mode` menentukan mode (BROWSER_LOCKDOWN/HYBRID/IN_APP_QUIZ)
+* Konfigurasi kuis -> `quiz_exams`
+* Subject kuis -> `quiz_subjects`
+* Soal kuis -> `quiz_questions` + `quiz_question_options`
+* Assign token siswa -> `quiz_token_assignments`
+* Attempt siswa -> `quiz_student_attempts` (termasuk profil siswa)
+* Jawaban siswa -> `quiz_student_answers`
+* Audit aksi proktor/guru -> `quiz_teacher_submissions`
+
+### Session Ending & Cleanup (DB)
+
+* Sesi dianggap berakhir hanya saat status `FINISHED` atau `REVOKED` + `end_time` terisi.
+* Pemicu selesai: endpoint `/session/finish` (FINISHED) atau `/admin/revoke` (REVOKED).
+* Logout admin hanya mengakhiri state lokal (UI/klien), **tidak** mengakhiri sesi di backend.
+* Setelah grace period, sesi berakhir di-archive ke `session_cleanup_audit` lalu data sesi dihapus (cascade).
 
 ---
 

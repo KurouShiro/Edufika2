@@ -27,6 +27,8 @@ object TestConstants {
     const val PREF_LAST_STUDENT_TOKEN = "pref_last_student_token"
     const val PREF_SESSION_SNAPSHOT = "pref_session_snapshot"
     const val PREF_ADMIN_WORKSPACE_CACHE = "pref_admin_workspace_cache"
+    const val PREF_ADMIN_WORKSPACE_CACHE_CHUNK_COUNT = "pref_admin_workspace_cache_chunk_count"
+    const val PREF_ADMIN_WORKSPACE_CACHE_CHUNK_PREFIX = "pref_admin_workspace_cache_chunk_"
     const val PREF_PENDING_RECOVERY_REASON = "pref_pending_recovery_reason"
     const val PREF_OFFLINE_EVENT_QUEUE = "pref_offline_event_queue"
     const val PREF_OFFLINE_HEARTBEAT_QUEUE = "pref_offline_heartbeat_queue"

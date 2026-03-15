@@ -8,9 +8,12 @@ export type AdminGeneratedTokenItem = {
   expiresAt: string;
 };
 
+type SessionMode = "BROWSER_LOCKDOWN" | "HYBRID" | "IN_APP_QUIZ";
+
 type AdminDashboardPanelProps = {
   language: AppLanguage;
   backendBaseUrl: string;
+  sessionMode: SessionMode;
   generatedToken: string;
   generatedTokenExpiryAt: string;
   tokenBatchCount: string;
@@ -25,8 +28,12 @@ type AdminDashboardPanelProps = {
   sessionControlStatus: string;
   backendMonitorError: string;
   tokenMonitorItems: AdminTokenMonitorItem[];
+  selectedMonitorToken: string;
+  selectedMonitorDetail: AdminTokenMonitorDetail | null;
   logs: string[];
+  onSelectMonitorToken: (token: string) => void;
   onTokenBatchCountChange: (value: string) => void;
+  onSessionModeChange: (value: SessionMode) => void;
   onTokenExpiryMinutesChange: (value: string) => void;
   onTokenLaunchUrlChange: (value: string) => void;
   onSaveTokenLaunchUrl: () => void;
@@ -45,6 +52,7 @@ type AdminDashboardPanelProps = {
   onCopyAllGeneratedTokens: () => void;
   onSelectGeneratedToken: (token: string) => void;
   onOpenWhitelist: () => void;
+  onOpenQuizBuilder: () => void;
   onOpenHistory: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
@@ -63,11 +71,38 @@ export type AdminTokenMonitorItem = {
   lastSeenLabel: string;
 };
 
+export type AdminTokenQuizResult = {
+  status: string;
+  score: number;
+  maxScore: number;
+  submittedAtLabel: string;
+  durationSeconds: number;
+  studentName: string;
+  studentClass: string;
+  studentElective: string;
+};
+
+export type AdminTokenMonitorDetail = {
+  token: string;
+  role: "student" | "admin";
+  status: MonitorStatus;
+  ipAddress: string;
+  deviceName: string;
+  expiresAtLabel: string;
+  lastSeenLabel: string;
+  proctorPin: string;
+  pinEffectiveDate: string;
+  launchUrl: string;
+  launchUpdatedAt: string;
+  quizResult: AdminTokenQuizResult | null;
+};
+
 type AdminTab = "monitor" | "tokens" | "logs";
 
 export default function AdminDashboardPanel({
   language,
   backendBaseUrl,
+  sessionMode,
   generatedToken,
   generatedTokenExpiryAt,
   tokenBatchCount,
@@ -82,8 +117,12 @@ export default function AdminDashboardPanel({
   sessionControlStatus,
   backendMonitorError,
   tokenMonitorItems,
+  selectedMonitorToken,
+  selectedMonitorDetail,
   logs,
+  onSelectMonitorToken,
   onTokenBatchCountChange,
+  onSessionModeChange,
   onTokenExpiryMinutesChange,
   onTokenLaunchUrlChange,
   onSaveTokenLaunchUrl,
@@ -102,6 +141,7 @@ export default function AdminDashboardPanel({
   onCopyAllGeneratedTokens,
   onSelectGeneratedToken,
   onOpenWhitelist,
+  onOpenQuizBuilder,
   onOpenHistory,
   onOpenSettings,
   onLogout,
@@ -145,6 +185,7 @@ export default function AdminDashboardPanel({
                 {tr(language, "Backend:", "Backend:")} {backendBaseUrl}
               </Text>
               <TerminalButton label={tr(language, "Kelola URL Whitelist", "Manage URL Whitelist")} variant="outline" onPress={onOpenWhitelist} />
+              <TerminalButton label={tr(language, "Buka Quiz Builder", "Open Quiz Builder")} variant="outline" onPress={onOpenQuizBuilder} />
               <TerminalButton label={tr(language, "Buka Riwayat", "Open History")} variant="outline" onPress={onOpenHistory} />
             </View>
             <View style={styles.card}>
@@ -187,7 +228,16 @@ export default function AdminDashboardPanel({
                 <Text style={styles.emptyText}>{tr(language, "Belum ada token.", "No generated tokens yet.")}</Text>
               ) : (
                 tokenMonitorItems.map((item) => (
-                  <View key={item.token} style={styles.tokenRow}>
+                  <Pressable
+                    key={item.token}
+                    style={[
+                      styles.tokenRow,
+                      item.token.trim().toUpperCase() === selectedMonitorToken.trim().toUpperCase()
+                        ? styles.tokenRowActive
+                        : null,
+                    ]}
+                    onPress={() => onSelectMonitorToken(item.token)}
+                  >
                     <View style={styles.tokenHeader}>
                       <Text style={styles.tokenValue}>{item.token}</Text>
                       <StatusBadge status={item.status} />
@@ -204,8 +254,84 @@ export default function AdminDashboardPanel({
                     <Text style={styles.tokenMeta}>
                       {tr(language, "Kadaluarsa", "Expires")}: {item.expiresAtLabel}
                     </Text>
-                  </View>
+                  </Pressable>
                 ))
+              )}
+            </View>
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{tr(language, "Menu Detail Token", "Token Detail Menu")}</Text>
+              {!selectedMonitorDetail ? (
+                <Text style={styles.emptyText}>
+                  {tr(language, "Pilih token pada daftar monitor.", "Select a token from monitor list.")}
+                </Text>
+              ) : (
+                <>
+                  <View style={styles.tokenHeader}>
+                    <Text style={styles.tokenValue}>{selectedMonitorDetail.token}</Text>
+                    <StatusBadge status={selectedMonitorDetail.status} />
+                  </View>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Peran", "Role")}: {selectedMonitorDetail.role.toUpperCase()}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    IP: {selectedMonitorDetail.ipAddress} | {tr(language, "Perangkat", "Device")}:{" "}
+                    {selectedMonitorDetail.deviceName}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Last Seen", "Last Seen")}: {selectedMonitorDetail.lastSeenLabel}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Kadaluarsa", "Expires")}: {selectedMonitorDetail.expiresAtLabel}
+                  </Text>
+                  {selectedMonitorDetail.quizResult ? (
+                    <>
+                      <Text style={styles.detailSectionTitle}>
+                        {tr(language, "Hasil Ujian Token", "Token Exam Result")}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "Status", "Status")}: {selectedMonitorDetail.quizResult.status}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "Nilai", "Score")}: {selectedMonitorDetail.quizResult.score}/
+                        {selectedMonitorDetail.quizResult.maxScore}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "Durasi", "Duration")}: {selectedMonitorDetail.quizResult.durationSeconds}s
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "Submitted", "Submitted")}: {selectedMonitorDetail.quizResult.submittedAtLabel}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "Nama", "Name")}: {selectedMonitorDetail.quizResult.studentName}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "Kelas", "Class")}: {selectedMonitorDetail.quizResult.studentClass}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "Peminatan", "Elective")}: {selectedMonitorDetail.quizResult.studentElective}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.detailSectionTitle}>
+                        {tr(language, "Info Token Website", "Website Token Info")}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "PIN Proktor", "Proctor PIN")}: {selectedMonitorDetail.proctorPin || "-"}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "PIN Efektif", "PIN Effective")}:{" "}
+                        {selectedMonitorDetail.pinEffectiveDate || "-"}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "URL Binding", "URL Binding")}: {selectedMonitorDetail.launchUrl || "-"}
+                      </Text>
+                      <Text style={styles.tokenMeta}>
+                        {tr(language, "URL Update", "URL Updated")}: {selectedMonitorDetail.launchUpdatedAt || "-"}
+                      </Text>
+                    </>
+                  )}
+                </>
               )}
             </View>
           </>
@@ -222,6 +348,27 @@ export default function AdminDashboardPanel({
                 placeholder="1-300"
                 keyboardType="number-pad"
               />
+              <Text style={styles.modeLabel}>{tr(language, "Mode Sesi", "Session Mode")}</Text>
+              <View style={styles.modeRow}>
+                {(["BROWSER_LOCKDOWN", "HYBRID", "IN_APP_QUIZ"] as SessionMode[]).map((mode) => {
+                  const active = sessionMode === mode;
+                  const label =
+                    mode === "BROWSER_LOCKDOWN"
+                      ? tr(language, "Browser", "Browser")
+                      : mode === "HYBRID"
+                        ? tr(language, "Hybrid", "Hybrid")
+                        : tr(language, "In-App Quiz", "In-App Quiz");
+                  return (
+                    <Pressable
+                      key={mode}
+                      style={[styles.modeBtn, active ? styles.modeBtnActive : null]}
+                      onPress={() => onSessionModeChange(mode)}
+                    >
+                      <Text style={[styles.modeBtnText, active ? styles.modeBtnTextActive : null]}>{label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
               <TerminalInput
                 value={tokenExpiryMinutes}
                 onChangeText={onTokenExpiryMinutesChange}
@@ -523,6 +670,10 @@ const styles = StyleSheet.create({
     padding: 8,
     marginBottom: 8,
   },
+  tokenRowActive: {
+    borderColor: "rgba(34,197,94,0.5)",
+    backgroundColor: "rgba(34,197,94,0.09)",
+  },
   tokenHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -539,6 +690,13 @@ const styles = StyleSheet.create({
     fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 15,
+  },
+  detailSectionTitle: {
+    color: "#111827",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 11,
+    marginTop: 8,
+    marginBottom: 4,
   },
   batchTitle: {
     color: "#111827",
@@ -586,6 +744,39 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   batchSelectHintActive: {
+    color: "#166534",
+    fontFamily: "Montserrat-Bold",
+  },
+  modeLabel: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-SemiBold",
+    fontSize: 10,
+    marginBottom: 6,
+  },
+  modeRow: {
+    flexDirection: "row",
+    gap: 6,
+    marginBottom: 8,
+  },
+  modeBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 8,
+    backgroundColor: "#ffffff",
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  modeBtnActive: {
+    borderColor: "rgba(34,197,94,0.55)",
+    backgroundColor: "rgba(34,197,94,0.14)",
+  },
+  modeBtnText: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-SemiBold",
+    fontSize: 9,
+  },
+  modeBtnTextActive: {
     color: "#166534",
     fontFamily: "Montserrat-Bold",
   },

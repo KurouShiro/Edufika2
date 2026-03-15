@@ -7,6 +7,8 @@ type ExamSelectionScreenProps = {
   language: AppLanguage;
   onScanQr: () => void;
   onManualInput: () => void;
+  onOpenQuiz: () => void;
+  showQuizOption: boolean;
   onLogout: () => void;
   onOpenSettings: () => void;
 };
@@ -15,6 +17,8 @@ export default function ExamSelectionScreen({
   language,
   onScanQr,
   onManualInput,
+  onOpenQuiz,
+  showQuizOption,
   onLogout,
   onOpenSettings,
 }: ExamSelectionScreenProps) {
@@ -53,6 +57,24 @@ export default function ExamSelectionScreen({
         </View>
       </Pressable>
 
+      {showQuizOption ? (
+        <Pressable style={[styles.card, styles.quizCard]} onPress={onOpenQuiz}>
+          <View style={[styles.iconPill, styles.quizIcon]}>
+            <Text style={styles.iconText}>QUIZ</Text>
+          </View>
+          <View style={styles.cardBody}>
+            <Text style={styles.cardTitle}>{tr(language, "Quiz Dalam Aplikasi", "In-App Quiz")}</Text>
+            <Text style={styles.cardSub}>
+              {tr(
+                language,
+                "Kerjakan soal langsung di Edufika.",
+                "Answer questions directly inside Edufika."
+              )}
+            </Text>
+          </View>
+        </Pressable>
+      ) : null}
+
       <View style={styles.disclaimer}>
         <Text style={styles.disclaimerText}>
           {tr(
@@ -88,6 +110,9 @@ const styles = StyleSheet.create({
   manualCard: {
     borderColor: "rgba(59,130,246,0.2)",
   },
+  quizCard: {
+    borderColor: "rgba(14,165,233,0.25)",
+  },
   iconPill: {
     width: 56,
     height: 56,
@@ -100,6 +125,9 @@ const styles = StyleSheet.create({
   },
   manualIcon: {
     backgroundColor: "rgba(59,130,246,0.12)",
+  },
+  quizIcon: {
+    backgroundColor: "rgba(14,165,233,0.12)",
   },
   iconText: {
     color: "#1f2937",

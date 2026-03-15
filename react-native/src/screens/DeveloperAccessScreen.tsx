@@ -25,8 +25,12 @@ type DeveloperAccessScreenProps = {
   adminToken: string;
   adminTokenExpiryAt: string;
   adminTokenExpiryMinutes: string;
+  adminTokenBatchCount: string;
+  adminTokenBatch: Array<{ token: string; expiresAt: string }>;
   onAdminTokenExpiryMinutesChange: (value: string) => void;
+  onAdminTokenBatchCountChange: (value: string) => void;
   onGenerateAdminToken: () => void;
+  onCopyAllAdminTokens: () => void;
   onCopyAdminToken: () => void;
   onOpenBrowserMode: () => void;
   onBack: () => void;
@@ -54,8 +58,12 @@ export default function DeveloperAccessScreen({
   adminToken,
   adminTokenExpiryAt,
   adminTokenExpiryMinutes,
+  adminTokenBatchCount,
+  adminTokenBatch,
   onAdminTokenExpiryMinutesChange,
+  onAdminTokenBatchCountChange,
   onGenerateAdminToken,
+  onCopyAllAdminTokens,
   onCopyAdminToken,
   onOpenBrowserMode,
   onBack,
@@ -80,9 +88,35 @@ export default function DeveloperAccessScreen({
       return "";
     }
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-      return trimmed;
+      try {
+        const parsed = new URL(trimmed);
+        const origin = parsed.origin;
+        const rawPath = parsed.pathname.replace(/\/+$/, "");
+        if (!rawPath || rawPath === "/") {
+          return origin;
+        }
+        if (/\/healthz?$/i.test(rawPath)) {
+          return origin;
+        }
+        return `${origin}${rawPath}`;
+      } catch {
+        return trimmed;
+      }
     }
-    return `http://${trimmed}`;
+    try {
+      const parsed = new URL(`http://${trimmed}`);
+      const origin = parsed.origin;
+      const rawPath = parsed.pathname.replace(/\/+$/, "");
+      if (!rawPath || rawPath === "/") {
+        return origin;
+      }
+      if (/\/healthz?$/i.test(rawPath)) {
+        return origin;
+      }
+      return `${origin}${rawPath}`;
+    } catch {
+      return `http://${trimmed}`;
+    }
   };
 
   const checkBackendConnection = async () => {
@@ -268,11 +302,25 @@ export default function DeveloperAccessScreen({
             keyboardType="number-pad"
             editable={unlocked}
           />
+          <TerminalInput
+            value={adminTokenBatchCount}
+            onChangeText={onAdminTokenBatchCountChange}
+            label={tr(language, "Admin Token Count", "Admin Token Count")}
+            placeholder="1"
+            keyboardType="number-pad"
+            editable={unlocked}
+          />
           <TerminalButton
-            label={tr(language, "Generate Admin Token", "Generate Admin Token")}
+            label={tr(language, "Generate Admin Tokens", "Generate Admin Tokens")}
             variant="outline"
             disabled={!unlocked}
             onPress={onGenerateAdminToken}
+          />
+          <TerminalButton
+            label={tr(language, "Copy All Admin Tokens", "Copy All Admin Tokens")}
+            variant="outline"
+            disabled={!unlocked || adminTokenBatch.length === 0}
+            onPress={onCopyAllAdminTokens}
           />
           <TerminalButton
             label={tr(language, "Copy Admin Token", "Copy Admin Token")}
@@ -282,6 +330,16 @@ export default function DeveloperAccessScreen({
           />
           <Text style={terminalStyles.bodyText}>{tr(language, "Token:", "Token:")} {adminToken || "-"}</Text>
           <Text style={terminalStyles.subtleText}>{tr(language, "Kadaluarsa:", "Expires:")} {adminTokenExpiryAt || "-"}</Text>
+          <Text style={terminalStyles.subtleText}>{tr(language, "Token Batch", "Token Batch")}</Text>
+          {adminTokenBatch.length === 0 ? (
+            <Text style={terminalStyles.subtleText}>-</Text>
+          ) : (
+            adminTokenBatch.map((entry) => (
+              <Text key={entry.token} style={terminalStyles.subtleText}>
+                {entry.token} | {entry.expiresAt}
+              </Text>
+            ))
+          )}
         </View>
 
         <TerminalButton label={tr(language, "Back", "Back")} variant="outline" onPress={onBack} />

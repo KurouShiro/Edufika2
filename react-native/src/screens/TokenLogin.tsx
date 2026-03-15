@@ -4,25 +4,27 @@ import { AppLanguage, tr } from "../i18n";
 import Keypad from "./Keypad";
 import Layout, { TerminalBadge, TerminalButton, palette } from "./Layout";
 
-type LoginScreenProps = {
+type TokenLoginProps = {
   language: AppLanguage;
   token: string;
   statusMessage: string;
   onTokenChange: (value: string) => void;
   onSubmit: () => void;
   onOpenSettings: () => void;
+  onClearAdminCache: () => void;
   onExitApp: () => void;
 };
 
-export default function LoginScreen({
+export default function TokenLogin({
   language,
   token,
   statusMessage,
   onTokenChange,
   onSubmit,
   onOpenSettings,
+  onClearAdminCache,
   onExitApp,
-}: LoginScreenProps) {
+}: TokenLoginProps) {
   const cursorOpacity = useRef(new Animated.Value(1)).current;
 
   React.useEffect(() => {
@@ -45,6 +47,9 @@ export default function LoginScreen({
         <View style={styles.footerRow}>
           <Pressable style={styles.iconButton} onPress={onOpenSettings}>
             <Text style={styles.iconText}>{tr(language, "SET", "SET")}</Text>
+          </Pressable>
+          <Pressable style={styles.iconButton} onPress={onClearAdminCache}>
+            <Text style={styles.iconText}>{tr(language, "CLR", "CLR")}</Text>
           </Pressable>
           <Pressable style={styles.iconButton} onPress={onExitApp}>
             <Text style={styles.iconText}>{tr(language, "EXIT", "EXIT")}</Text>

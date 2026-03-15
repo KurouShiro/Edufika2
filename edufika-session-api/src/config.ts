@@ -28,6 +28,13 @@ export const config = {
   sessionArchiveGraceSeconds: parseIntEnv("SESSION_ARCHIVE_GRACE_SECONDS", 60),
   sessionCleanupBatchSize: parseIntEnv("SESSION_CLEANUP_BATCH_SIZE", 25),
   riskLockThreshold: parseIntEnv("RISK_LOCK_THRESHOLD", 12),
+  studentAuthTtlHours: parseIntEnv("STUDENT_AUTH_TTL_HOURS", 12),
+  googleDriveClientEmail: process.env.GOOGLE_DRIVE_CLIENT_EMAIL?.trim() || "",
+  googleDrivePrivateKey: (process.env.GOOGLE_DRIVE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
+  googleDriveFolderId:
+    process.env.GOOGLE_DRIVE_FOLDER_ID?.trim() || "1YBs9n7cAskGOWdjw2IGwV6zBHyYB44hT",
+  googleDriveScope:
+    process.env.GOOGLE_DRIVE_SCOPE?.trim() || "https://www.googleapis.com/auth/drive.file",
   requireHttps: process.env.REQUIRE_HTTPS === "true",
   nodeEnv: process.env.NODE_ENV || "development",
   defaultWhitelist: (process.env.DEFAULT_WHITELIST || "https://example.org,https://school.ac.id/exam")
