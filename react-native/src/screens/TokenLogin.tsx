@@ -12,7 +12,7 @@ type TokenLoginProps = {
   onSubmit: () => void;
   onOpenSettings: () => void;
   onClearAdminCache: () => void;
-  onExitApp: () => void;
+  onExitToSelection: () => void;
 };
 
 export default function TokenLogin({
@@ -23,7 +23,7 @@ export default function TokenLogin({
   onSubmit,
   onOpenSettings,
   onClearAdminCache,
-  onExitApp,
+  onExitToSelection,
 }: TokenLoginProps) {
   const cursorOpacity = useRef(new Animated.Value(1)).current;
 
@@ -51,7 +51,7 @@ export default function TokenLogin({
           <Pressable style={styles.iconButton} onPress={onClearAdminCache}>
             <Text style={styles.iconText}>{tr(language, "CLR", "CLR")}</Text>
           </Pressable>
-          <Pressable style={styles.iconButton} onPress={onExitApp}>
+          <Pressable style={styles.iconButton} onPress={onExitToSelection}>
             <Text style={styles.iconText}>{tr(language, "EXIT", "EXIT")}</Text>
           </Pressable>
         </View>

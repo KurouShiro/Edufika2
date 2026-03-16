@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
 import Layout, { TerminalButton, TerminalInput, palette } from "./Layout";
 import IntegrityWarningModal from "./IntegrityWarningModal";
 import {
   buildQuizResultMarkdown,
-  saveMarkdownToQuizResult,
+  saveTextToQuizResult,
   uploadMarkdownToDrive,
 } from "../utils/quizResultExport";
 
@@ -16,6 +16,8 @@ type QuizStudentScreenProps = {
   accessSignature: string;
   onBack: () => void;
   onLog: (message: string) => void;
+  kioskEnabled: boolean;
+  onSetKioskEnabled?: (value: boolean) => void;
   showIntegrityWarning?: boolean;
   integrityMessage?: string;
   onDismissIntegrityWarning?: () => void;
@@ -111,9 +113,44 @@ export default function QuizStudentScreen({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedByQuestion, setSelectedByQuestion] = useState<Record<number, number[]>>({});
   const [finished, setFinished] = useState<QuizFinishPayload | null>(null);
+  const [resultDetailsOpen, setResultDetailsOpen] = useState(false);
   const [studentName, setStudentName] = useState(studentAccount?.name ?? "");
   const [studentClass, setStudentClass] = useState(studentAccount?.studentClass ?? "");
   const [studentElective, setStudentElective] = useState(studentAccount?.elective ?? "");
+  const kioskOverrideRef = useRef<{ active: boolean; previous: boolean }>({
+    active: false,
+    previous: kioskEnabled,
+  });
+
+  const activateKioskOverride = useCallback(() => {
+    if (!onSetKioskEnabled) {
+      return;
+    }
+    if (!kioskOverrideRef.current.active) {
+      kioskOverrideRef.current = { active: true, previous: kioskEnabled };
+    }
+    onSetKioskEnabled(false);
+  }, [kioskEnabled, onSetKioskEnabled]);
+
+  const restoreKioskOverride = useCallback(() => {
+    if (!onSetKioskEnabled) {
+      return;
+    }
+    if (kioskOverrideRef.current.active) {
+      onSetKioskEnabled(kioskOverrideRef.current.previous);
+      kioskOverrideRef.current.active = false;
+    }
+  }, [onSetKioskEnabled]);
+
+  useEffect(() => {
+    if (finished) {
+      activateKioskOverride();
+      return;
+    }
+    restoreKioskOverride();
+  }, [activateKioskOverride, finished, restoreKioskOverride]);
+
+  useEffect(() => restoreKioskOverride, [restoreKioskOverride]);
 
   useEffect(() => {
     if (!studentAccount) {
@@ -179,9 +216,9 @@ export default function QuizStudentScreen({
             ),
       });
 
-      let savedResult: Awaited<ReturnType<typeof saveMarkdownToQuizResult>> | null = null;
+      let savedResult: Awaited<ReturnType<typeof saveTextToQuizResult>> | null = null;
       try {
-        savedResult = await saveMarkdownToQuizResult(markdown, fileNameBase);
+        savedResult = await saveTextToQuizResult(markdown, fileNameBase);
         onLog(`Quiz result saved: ${savedResult.path}`);
         setStatusLine(
           tr(
@@ -201,7 +238,7 @@ export default function QuizStudentScreen({
           backendBaseUrl,
           sessionId,
           accessSignature,
-          fileName: `${fileNameBase}.md`,
+          fileName: `${fileNameBase}.txt`,
           markdown,
           metadata: {
             quiz_title: quizMeta.title,
@@ -224,7 +261,7 @@ export default function QuizStudentScreen({
         onLog(`Quiz result upload failed: ${message}`);
         if (!savedResult) {
           try {
-            savedResult = await saveMarkdownToQuizResult(markdown, fileNameBase);
+            savedResult = await saveTextToQuizResult(markdown, fileNameBase);
             onLog(`Quiz result saved after upload failure: ${savedResult.path}`);
           } catch (saveError) {
             const saveMessage = saveError instanceof Error ? saveError.message : String(saveError);
@@ -406,6 +443,8 @@ export default function QuizStudentScreen({
       });
       const payload = (await parseJsonResponse(response)) as QuizFinishPayload;
       setFinished(payload);
+      setResultDetailsOpen(false);
+      activateKioskOverride();
       setStatusLine(
         tr(
           language,
@@ -562,21 +601,43 @@ export default function QuizStudentScreen({
 
         {finished ? (
           <View style={styles.card}>
-            <Text style={styles.resultTitle}>
-              {tr(language, "Hasil Quiz", "Quiz Result")} {finished.score}/{finished.max_score}
+            <Text style={styles.resultLabel}>
+              {tr(language, "Nilai Akhir", "Final Grade")}
             </Text>
+            <View style={styles.resultHero}>
+              <Text style={styles.resultScore}>{finished.score}</Text>
+              <Text style={styles.resultScoreMax}>/{finished.max_score}</Text>
+            </View>
             <Text style={styles.statusText}>
               {tr(language, "Durasi", "Duration")}: {finished.duration_seconds}s
             </Text>
             {finished.show_results_immediately && finished.result_items.length > 0 ? (
-              finished.result_items.map((item) => (
-                <View key={item.question_id} style={styles.resultItem}>
-                  <Text style={styles.resultQuestion}>{item.question_text}</Text>
-                  <Text style={styles.resultMeta}>
-                    {item.points_awarded}/{item.max_points} | {item.is_correct ? "Correct" : "Incorrect"}
+              <>
+                <Pressable
+                  style={styles.resultDropdown}
+                  onPress={() => setResultDetailsOpen((prev) => !prev)}
+                >
+                  <Text style={styles.resultDropdownText}>
+                    {resultDetailsOpen
+                      ? tr(language, "Sembunyikan Jawaban", "Hide Answers")
+                      : tr(language, "Lihat Jawaban", "Show Answers")}
                   </Text>
-                </View>
-              ))
+                  <Text style={styles.resultDropdownChevron}>
+                    {resultDetailsOpen ? "^" : "v"}
+                  </Text>
+                </Pressable>
+                {resultDetailsOpen ? (
+                  finished.result_items.map((item) => (
+                    <View key={item.question_id} style={styles.resultItem}>
+                      <Text style={styles.resultQuestion}>{item.question_text}</Text>
+                      <Text style={styles.resultMeta}>
+                        {item.points_awarded}/{item.max_points} |{" "}
+                        {item.is_correct ? "Correct" : "Incorrect"}
+                      </Text>
+                    </View>
+                  ))
+                ) : null}
+              </>
             ) : (
               <Text style={styles.statusText}>
                 {tr(
@@ -661,11 +722,53 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginBottom: 4,
   },
-  resultTitle: {
+  resultLabel: {
+    color: "#4b5563",
+    fontFamily: "Montserrat-SemiBold",
+    fontSize: 10,
+    textAlign: "center",
+    marginBottom: 6,
+  },
+  resultHero: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "flex-end",
+    gap: 6,
+    marginBottom: 8,
+  },
+  resultScore: {
     color: "#111827",
     fontFamily: "Montserrat-Bold",
-    fontSize: 14,
+    fontSize: 46,
+    letterSpacing: 1,
+  },
+  resultScoreMax: {
+    color: "#9ca3af",
+    fontFamily: "Montserrat-SemiBold",
+    fontSize: 16,
+    marginBottom: 6,
+  },
+  resultDropdown: {
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: "#f9fafb",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: 8,
+  },
+  resultDropdownText: {
+    color: "#111827",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 11,
+  },
+  resultDropdownChevron: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 12,
   },
   resultItem: {
     borderWidth: 1,

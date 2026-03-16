@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
 import Layout, { TerminalButton, TerminalInput, palette } from "./Layout";
@@ -12,6 +12,8 @@ type QuizTeacherScreenProps = {
   onBack: () => void;
   onLog: (message: string) => void;
   onOpenQuestionBuilder?: () => void;
+  cache?: QuizTeacherCache;
+  onCacheChange?: (cache: QuizTeacherCache) => void;
 };
 
 type QuizDefinition = {
@@ -71,6 +73,34 @@ type MonitorPayload = {
   }>;
 };
 
+type QuizAccessMode = "token" | "basic" | "";
+
+export type QuizTeacherCache = {
+  title: string;
+  description: string;
+  durationMinutes: string;
+  showResultsImmediately: boolean;
+  randomizeQuestions: boolean;
+  allowReview: boolean;
+  subjectCode: string;
+  subjectName: string;
+  subjectIdInput: string;
+  questionText: string;
+  questionType: QuizQuestionType;
+  optionA: string;
+  optionB: string;
+  optionC: string;
+  optionD: string;
+  optionE: string;
+  optionF: string;
+  correctOptionKey: string;
+  assignTokenInput: string;
+  accessMode: QuizAccessMode;
+  tokenGateInput: string;
+  lockedStudentToken: string;
+  tokenConfirmed: boolean;
+};
+
 function normalizeBackendBaseUrl(raw: string): string {
   return raw.trim().replace(/\/+$/, "");
 }
@@ -93,31 +123,40 @@ export default function QuizTeacherScreen({
   onBack,
   onLog,
   onOpenQuestionBuilder,
+  cache,
+  onCacheChange,
 }: QuizTeacherScreenProps) {
-  const [title, setTitle] = useState("Edufika In-App Quiz");
-  const [description, setDescription] = useState("");
-  const [durationMinutes, setDurationMinutes] = useState("60");
-  const [showResultsImmediately, setShowResultsImmediately] = useState(true);
-  const [randomizeQuestions, setRandomizeQuestions] = useState(false);
-  const [allowReview, setAllowReview] = useState(true);
-  const [subjectCode, setSubjectCode] = useState("");
-  const [subjectName, setSubjectName] = useState("");
-  const [subjectIdInput, setSubjectIdInput] = useState("");
-  const [questionText, setQuestionText] = useState("");
-  const [questionType, setQuestionType] = useState<QuizQuestionType>("single_choice");
-  const [optionA, setOptionA] = useState("");
-  const [optionB, setOptionB] = useState("");
-  const [optionC, setOptionC] = useState("");
-  const [optionD, setOptionD] = useState("");
-  const [optionE, setOptionE] = useState("");
-  const [optionF, setOptionF] = useState("");
-  const [correctOptionKey, setCorrectOptionKey] = useState("A");
-  const [assignTokenInput, setAssignTokenInput] = useState("");
+  const [title, setTitle] = useState(() => cache?.title ?? "Edufika In-App Quiz");
+  const [description, setDescription] = useState(() => cache?.description ?? "");
+  const [durationMinutes, setDurationMinutes] = useState(() => cache?.durationMinutes ?? "60");
+  const [showResultsImmediately, setShowResultsImmediately] = useState(() => cache?.showResultsImmediately ?? true);
+  const [randomizeQuestions, setRandomizeQuestions] = useState(() => cache?.randomizeQuestions ?? false);
+  const [allowReview, setAllowReview] = useState(() => cache?.allowReview ?? true);
+  const [subjectCode, setSubjectCode] = useState(() => cache?.subjectCode ?? "");
+  const [subjectName, setSubjectName] = useState(() => cache?.subjectName ?? "");
+  const [subjectIdInput, setSubjectIdInput] = useState(() => cache?.subjectIdInput ?? "");
+  const [questionText, setQuestionText] = useState(() => cache?.questionText ?? "");
+  const [questionType, setQuestionType] = useState<QuizQuestionType>(
+    () => cache?.questionType ?? "single_choice"
+  );
+  const [optionA, setOptionA] = useState(() => cache?.optionA ?? "");
+  const [optionB, setOptionB] = useState(() => cache?.optionB ?? "");
+  const [optionC, setOptionC] = useState(() => cache?.optionC ?? "");
+  const [optionD, setOptionD] = useState(() => cache?.optionD ?? "");
+  const [optionE, setOptionE] = useState(() => cache?.optionE ?? "");
+  const [optionF, setOptionF] = useState(() => cache?.optionF ?? "");
+  const [correctOptionKey, setCorrectOptionKey] = useState(() => cache?.correctOptionKey ?? "A");
+  const [assignTokenInput, setAssignTokenInput] = useState(() => cache?.assignTokenInput ?? "");
   const [studentTokens, setStudentTokens] = useState<string[]>([]);
   const [statusLine, setStatusLine] = useState("");
   const [loading, setLoading] = useState(false);
   const [definition, setDefinition] = useState<QuizDefinition | null>(null);
   const [results, setResults] = useState<QuizResults | null>(null);
+  const [accessMode, setAccessMode] = useState<QuizAccessMode>(() => cache?.accessMode ?? "");
+  const [tokenGateInput, setTokenGateInput] = useState(() => cache?.tokenGateInput ?? "");
+  const [lockedStudentToken, setLockedStudentToken] = useState(() => cache?.lockedStudentToken ?? "");
+  const [tokenConfirmed, setTokenConfirmed] = useState(() => cache?.tokenConfirmed ?? false);
+  const [pendingTokenAssignment, setPendingTokenAssignment] = useState(false);
 
   const base = useMemo(() => normalizeBackendBaseUrl(backendBaseUrl), [backendBaseUrl]);
 
@@ -138,6 +177,63 @@ export default function QuizTeacherScreen({
     [definition]
   );
   const questionSlotsLeft = Math.max(0, 40 - activeQuestionCount);
+  const isAccessReady = accessMode === "basic" || tokenConfirmed;
+
+  useEffect(() => {
+    if (!onCacheChange) {
+      return;
+    }
+    onCacheChange({
+      title,
+      description,
+      durationMinutes,
+      showResultsImmediately,
+      randomizeQuestions,
+      allowReview,
+      subjectCode,
+      subjectName,
+      subjectIdInput,
+      questionText,
+      questionType,
+      optionA,
+      optionB,
+      optionC,
+      optionD,
+      optionE,
+      optionF,
+      correctOptionKey,
+      assignTokenInput,
+      accessMode,
+      tokenGateInput,
+      lockedStudentToken,
+      tokenConfirmed,
+    });
+  }, [
+    accessMode,
+    allowReview,
+    assignTokenInput,
+    correctOptionKey,
+    description,
+    durationMinutes,
+    lockedStudentToken,
+    onCacheChange,
+    optionA,
+    optionB,
+    optionC,
+    optionD,
+    optionE,
+    optionF,
+    questionText,
+    questionType,
+    randomizeQuestions,
+    showResultsImmediately,
+    subjectCode,
+    subjectIdInput,
+    subjectName,
+    title,
+    tokenConfirmed,
+    tokenGateInput,
+  ]);
 
   const refreshData = useCallback(async () => {
     if (!base || !sessionId || !accessSignature) {
@@ -199,6 +295,42 @@ export default function QuizTeacherScreen({
       setLoading(false);
     }
   }, [accessSignature, base, language, onLog, sessionId]);
+
+  const resetAccessMode = useCallback(() => {
+    setAccessMode("");
+    setTokenGateInput("");
+    setLockedStudentToken("");
+    setTokenConfirmed(false);
+    setPendingTokenAssignment(false);
+  }, []);
+
+  const confirmTokenGate = useCallback(() => {
+    const normalized = tokenGateInput.trim().toUpperCase();
+    if (!normalized) {
+      setStatusLine(tr(language, "Token siswa wajib diisi.", "Student token is required."));
+      return;
+    }
+    setLockedStudentToken(normalized);
+    setTokenConfirmed(true);
+    setPendingTokenAssignment(true);
+    setAssignTokenInput(normalized);
+    setStatusLine(tr(language, `Token ${normalized} siap dipakai.`, `Token ${normalized} ready.`));
+    onLog(`Quiz builder token gate accepted: ${normalized}`);
+  }, [language, onLog, tokenGateInput]);
+
+  const selectAccessMode = useCallback(
+    (mode: QuizAccessMode) => {
+      setAccessMode(mode);
+      setTokenGateInput("");
+      setLockedStudentToken("");
+      setTokenConfirmed(false);
+      setPendingTokenAssignment(false);
+      if (mode === "basic") {
+        setStatusLine(tr(language, "Mode basic auth aktif.", "Basic auth mode enabled."));
+      }
+    },
+    [language]
+  );
 
   const saveConfig = useCallback(async () => {
     if (!base || !sessionId || !accessSignature) {
@@ -524,6 +656,34 @@ export default function QuizTeacherScreen({
     [accessSignature, authHeaders, base, language, onLog, sessionId]
   );
 
+  useEffect(() => {
+    if (accessMode !== "token" || !tokenConfirmed || !lockedStudentToken) {
+      return;
+    }
+    if ((definition?.assigned_tokens ?? []).includes(lockedStudentToken)) {
+      if (pendingTokenAssignment) {
+        setPendingTokenAssignment(false);
+      }
+      return;
+    }
+    if (!pendingTokenAssignment || activeQuestionCount <= 0) {
+      return;
+    }
+    const assignToken = async () => {
+      setPendingTokenAssignment(false);
+      await setQuizAssignment(lockedStudentToken, true);
+    };
+    void assignToken();
+  }, [
+    accessMode,
+    activeQuestionCount,
+    definition?.assigned_tokens,
+    lockedStudentToken,
+    pendingTokenAssignment,
+    setQuizAssignment,
+    tokenConfirmed,
+  ]);
+
   const exportResults = useCallback(async () => {
     if (!results?.results || results.results.length === 0) {
       setStatusLine(tr(language, "Belum ada hasil siswa.", "No student results yet."));
@@ -620,46 +780,141 @@ export default function QuizTeacherScreen({
     >
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>{tr(language, "Quiz Config", "Quiz Config")}</Text>
-          <TerminalInput
-            value={title}
-            onChangeText={setTitle}
-            label={tr(language, "Judul Quiz", "Quiz Title")}
-            placeholder="Edufika Mid Test"
-          />
-          <TerminalInput
-            value={description}
-            onChangeText={setDescription}
-            label={tr(language, "Deskripsi", "Description")}
-            placeholder="Matematika kelas 9"
-          />
-          <TerminalInput
-            value={durationMinutes}
-            onChangeText={setDurationMinutes}
-            label={tr(language, "Durasi (Menit)", "Duration (Minutes)")}
-            placeholder="60"
-            keyboardType="number-pad"
-          />
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>
-              {tr(language, "Tampilkan hasil langsung", "Show results immediately")}
-            </Text>
-            <Switch value={showResultsImmediately} onValueChange={setShowResultsImmediately} />
+          <Text style={styles.cardTitle}>{tr(language, "Mode Akses Builder", "Builder Access Mode")}</Text>
+          <Text style={styles.helperText}>
+            {tr(
+              language,
+              "Pilih metode akses sebelum membuat kuis.",
+              "Select access method before creating a quiz."
+            )}
+          </Text>
+          <View style={styles.modeChoiceRow}>
+            <Pressable
+              style={[
+                styles.modeChoiceBtn,
+                accessMode === "token" ? styles.modeChoiceBtnActive : null,
+              ]}
+              onPress={() => selectAccessMode("token")}
+            >
+              <Text
+                style={[
+                  styles.modeChoiceText,
+                  accessMode === "token" ? styles.modeChoiceTextActive : null,
+                ]}
+              >
+                {tr(language, "Token Siswa", "Student Token")}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[
+                styles.modeChoiceBtn,
+                accessMode === "basic" ? styles.modeChoiceBtnActive : null,
+              ]}
+              onPress={() => selectAccessMode("basic")}
+            >
+              <Text
+                style={[
+                  styles.modeChoiceText,
+                  accessMode === "basic" ? styles.modeChoiceTextActive : null,
+                ]}
+              >
+                {tr(language, "Basic Auth", "Basic Auth")}
+              </Text>
+            </Pressable>
           </View>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>{tr(language, "Acak pertanyaan", "Randomize questions")}</Text>
-            <Switch value={randomizeQuestions} onValueChange={setRandomizeQuestions} />
-          </View>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>{tr(language, "Izinkan review", "Allow review")}</Text>
-            <Switch value={allowReview} onValueChange={setAllowReview} />
-          </View>
-          <TerminalButton
-            label={tr(language, "Simpan Konfigurasi", "Save Config")}
-            onPress={() => void saveConfig()}
-            disabled={loading}
-          />
+          {accessMode ? (
+            <View style={styles.modeHintRow}>
+              <Text style={styles.statusText}>
+                {accessMode === "token"
+                  ? tr(language, "Mode token aktif.", "Token mode active.")
+                  : tr(language, "Mode basic auth aktif.", "Basic auth mode active.")}
+              </Text>
+              <Pressable style={styles.modeResetBtn} onPress={resetAccessMode}>
+                <Text style={styles.modeResetText}>{tr(language, "Ganti Mode", "Change Mode")}</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
+
+        {accessMode === "token" && !tokenConfirmed ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>{tr(language, "Token Siswa", "Student Token")}</Text>
+            <Text style={styles.helperText}>
+              {tr(
+                language,
+                "Masukkan token siswa sebelum membuat kuis.",
+                "Enter the student token before building the quiz."
+              )}
+            </Text>
+            <TerminalInput
+              value={tokenGateInput}
+              onChangeText={setTokenGateInput}
+              label={tr(language, "Token Siswa", "Student Token")}
+              placeholder="S-XXXXXXXXXX"
+              autoCapitalize="characters"
+            />
+            <TerminalButton
+              label={tr(language, "Lanjutkan", "Continue")}
+              variant="outline"
+              onPress={confirmTokenGate}
+              disabled={loading}
+            />
+          </View>
+        ) : null}
+
+        {!isAccessReady ? (
+          <View style={styles.card}>
+            <Text style={styles.emptyText}>
+              {tr(
+                language,
+                "Pilih mode akses untuk membuka builder.",
+                "Select an access mode to open the builder."
+              )}
+            </Text>
+          </View>
+        ) : (
+          <>
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{tr(language, "Quiz Config", "Quiz Config")}</Text>
+              <TerminalInput
+                value={title}
+                onChangeText={setTitle}
+                label={tr(language, "Judul Quiz", "Quiz Title")}
+                placeholder="Edufika Mid Test"
+              />
+              <TerminalInput
+                value={description}
+                onChangeText={setDescription}
+                label={tr(language, "Deskripsi", "Description")}
+                placeholder="Matematika kelas 9"
+              />
+              <TerminalInput
+                value={durationMinutes}
+                onChangeText={setDurationMinutes}
+                label={tr(language, "Durasi (Menit)", "Duration (Minutes)")}
+                placeholder="60"
+                keyboardType="number-pad"
+              />
+              <View style={styles.switchRow}>
+                <Text style={styles.switchLabel}>
+                  {tr(language, "Tampilkan hasil langsung", "Show results immediately")}
+                </Text>
+                <Switch value={showResultsImmediately} onValueChange={setShowResultsImmediately} />
+              </View>
+              <View style={styles.switchRow}>
+                <Text style={styles.switchLabel}>{tr(language, "Acak pertanyaan", "Randomize questions")}</Text>
+                <Switch value={randomizeQuestions} onValueChange={setRandomizeQuestions} />
+              </View>
+              <View style={styles.switchRow}>
+                <Text style={styles.switchLabel}>{tr(language, "Izinkan review", "Allow review")}</Text>
+                <Switch value={allowReview} onValueChange={setAllowReview} />
+              </View>
+              <TerminalButton
+                label={tr(language, "Simpan Konfigurasi", "Save Config")}
+                onPress={() => void saveConfig()}
+                disabled={loading}
+              />
+            </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>{tr(language, "Tambah Subject", "Add Subject")}</Text>
@@ -776,6 +1031,7 @@ export default function QuizTeacherScreen({
             label={tr(language, "Token Siswa", "Student Token")}
             placeholder="S-XXXXXXXXXX"
             autoCapitalize="characters"
+            editable={!(accessMode === "token" && tokenConfirmed)}
           />
           <TerminalButton
             label={tr(language, "Assign ke Token", "Assign to Token")}
@@ -891,6 +1147,8 @@ export default function QuizTeacherScreen({
             <Text style={styles.emptyText}>{tr(language, "Belum ada hasil siswa.", "No student results yet.")}</Text>
           )}
         </View>
+          </>
+        )}
       </ScrollView>
     </Layout>
   );
@@ -964,6 +1222,61 @@ const styles = StyleSheet.create({
     fontFamily: "Montserrat-Regular",
     fontSize: 10,
     marginTop: 8,
+  },
+  helperText: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-Regular",
+    fontSize: 10,
+    marginTop: 4,
+  },
+  modeChoiceRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 8,
+  },
+  modeChoiceBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 12,
+    backgroundColor: "#ffffff",
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  modeChoiceBtnActive: {
+    borderColor: "rgba(34,197,94,0.55)",
+    backgroundColor: "rgba(34,197,94,0.14)",
+  },
+  modeChoiceText: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 10,
+    letterSpacing: 0.6,
+  },
+  modeChoiceTextActive: {
+    color: "#166534",
+    fontFamily: "Montserrat-Bold",
+  },
+  modeHintRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+  },
+  modeResetBtn: {
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: "#ffffff",
+  },
+  modeResetText: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 9,
+    letterSpacing: 0.6,
   },
   emptyText: {
     color: "#9ca3af",

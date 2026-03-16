@@ -4348,11 +4348,18 @@ export class SessionService {
     markdown: string,
     metadata: Record<string, unknown>
   ): Promise<{ file_id: string; web_view_link?: string }> {
+    const useOAuth =
+      Boolean(config.googleDriveClientId) &&
+      Boolean(config.googleDriveClientSecret) &&
+      Boolean(config.googleDriveRefreshToken);
     const clientEmail = config.googleDriveClientEmail;
     const privateKey = config.googleDrivePrivateKey;
     const folderId = config.googleDriveFolderId;
-    if (!clientEmail || !privateKey || !folderId) {
-      throw new ApiError(500, "Google Drive credentials are not configured");
+    if (!useOAuth && (!clientEmail || !privateKey)) {
+      throw new ApiError(
+        500,
+        "Google Drive credentials are not configured (set GDRIVE_CLIENT_ID/SECRET/REFRESH_TOKEN or GOOGLE_DRIVE_CLIENT_EMAIL/PRIVATE_KEY)"
+      );
     }
     const fetchFn = (globalThis as any).fetch as
       | ((input: string, init?: { method?: string; headers?: Record<string, string>; body?: any }) => Promise<any>)
@@ -4360,26 +4367,40 @@ export class SessionService {
     if (!fetchFn) {
       throw new ApiError(500, "Fetch API is not available");
     }
-    const now = Math.floor(Date.now() / 1000);
-    const assertion = jwt.sign(
-      {
-        iss: clientEmail,
-        scope: config.googleDriveScope,
-        aud: "https://oauth2.googleapis.com/token",
-        iat: now,
-        exp: now + 3600,
-      },
-      privateKey,
-      { algorithm: "RS256" }
-    );
-    const tokenResponse = await fetchFn("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        assertion,
-      }).toString(),
-    });
+    let tokenResponse;
+    if (useOAuth) {
+      tokenResponse = await fetchFn("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: config.googleDriveClientId,
+          client_secret: config.googleDriveClientSecret,
+          refresh_token: config.googleDriveRefreshToken,
+        }).toString(),
+      });
+    } else {
+      const now = Math.floor(Date.now() / 1000);
+      const assertion = jwt.sign(
+        {
+          iss: clientEmail,
+          scope: config.googleDriveScope,
+          aud: "https://oauth2.googleapis.com/token",
+          iat: now,
+          exp: now + 3600,
+        },
+        privateKey,
+        { algorithm: "RS256" }
+      );
+      tokenResponse = await fetchFn("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+          assertion,
+        }).toString(),
+      });
+    }
     const tokenPayload = await tokenResponse.json().catch(() => ({}));
     if (!tokenResponse.ok) {
       const message = typeof tokenPayload?.error === "string"
@@ -4394,11 +4415,16 @@ export class SessionService {
 
     const boundary = `edufika_${Date.now()}`;
     const description = Object.keys(metadata || {}).length > 0 ? JSON.stringify(metadata) : undefined;
+    const lowerName = fileName.toLowerCase();
+    const isMarkdown = lowerName.endsWith(".md") || lowerName.endsWith(".markdown");
+    const mimeType = isMarkdown ? "text/markdown" : "text/plain";
     const metadataPayload: Record<string, unknown> = {
       name: fileName,
-      parents: [folderId],
-      mimeType: "text/markdown",
+      mimeType,
     };
+    if (folderId) {
+      metadataPayload.parents = [folderId];
+    }
     if (description) {
       metadataPayload.description = description;
     }
@@ -4409,7 +4435,7 @@ export class SessionService {
       "",
       JSON.stringify(metadataPayload),
       `--${boundary}`,
-      "Content-Type: text/markdown; charset=UTF-8",
+      `Content-Type: ${mimeType}; charset=UTF-8`,
       "",
       markdown,
       `--${boundary}--`,

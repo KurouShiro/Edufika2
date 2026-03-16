@@ -36,6 +36,7 @@ export type QuestionDraft = {
   optionC: string;
   optionD: string;
   correctKeys: string;
+  points: string;
 };
 
 export type QuizQuestionBuilderCache = {
@@ -109,6 +110,39 @@ function getQuestionTypeLabel(language: AppLanguage, type: QuizQuestionTypeSelec
   return tr(language, found.labelId, found.labelEn);
 }
 
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areSavedQuizzesEqual(left: SavedQuizItem[], right: SavedQuizItem[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (
+      a.id !== b.id ||
+      a.subjectCode !== b.subjectCode ||
+      a.subjectName !== b.subjectName ||
+      a.description !== b.description ||
+      a.ordering !== b.ordering ||
+      a.questionCount !== b.questionCount
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function createDraft(seed: number): QuestionDraft {
   return {
     id: seed,
@@ -119,6 +153,7 @@ function createDraft(seed: number): QuestionDraft {
     optionC: "",
     optionD: "",
     correctKeys: "",
+    points: "1",
   };
 }
 
@@ -209,6 +244,13 @@ const QuestionDraftCard = memo(function QuestionDraftCard({
                 label={tr(language, "Pertanyaan", "Question")}
                 placeholder="2 + 2 = ?"
               />
+              <TerminalInput
+                value={draft.points}
+                onChangeText={(value) => onUpdateDraft(index, { points: value })}
+                label={tr(language, "Poin Jawaban Benar", "Points for Correct Answer")}
+                placeholder="1"
+                keyboardType="number-pad"
+              />
 
               {draft.questionType !== "true_false" ? (
                 <>
@@ -274,6 +316,15 @@ export default function QuizQuestionBuilderScreen({
 
   const base = useMemo(() => normalizeBackendBaseUrl(backendBaseUrl), [backendBaseUrl]);
   const questionSlotsLeft = Math.max(0, 40 - activeQuestionCount);
+  const selectedQuizId = useMemo(() => {
+    const parsed = Number.parseInt(subjectIdInput, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [subjectIdInput]);
+  const selectedQuiz = useMemo(
+    () => (selectedQuizId ? savedQuizzes.find((quiz) => quiz.id === selectedQuizId) ?? null : null),
+    [savedQuizzes, selectedQuizId]
+  );
+  const hasSelectedQuiz = Boolean(selectedQuiz);
 
   const authHeaders = useMemo(
     () => ({
@@ -340,14 +391,14 @@ export default function QuizQuestionBuilderScreen({
             .filter((item): item is SavedQuizItem => item !== null)
             .sort((a, b) => (a.ordering === b.ordering ? a.id - b.id : a.ordering - b.ordering))
         : [];
-      setSavedQuizzes(normalizedSubjects);
+      setSavedQuizzes((prev) => (areSavedQuizzesEqual(prev, normalizedSubjects) ? prev : normalizedSubjects));
 
       const questionCount = normalizedSubjects.reduce((total, subject) => total + subject.questionCount, 0);
-      setActiveQuestionCount(questionCount);
+      setActiveQuestionCount((prev) => (prev === questionCount ? prev : questionCount));
       const assigned = Array.isArray(configPayload.assigned_tokens)
         ? configPayload.assigned_tokens.map((token) => String(token).trim().toUpperCase()).filter(Boolean)
         : [];
-      setAssignedTokens(assigned);
+      setAssignedTokens((prev) => (areStringArraysEqual(prev, assigned) ? prev : assigned));
 
       const monitorRes = await fetch(
         `${base}/admin/monitor?session_id=${encodeURIComponent(sessionId)}&access_signature=${encodeURIComponent(accessSignature)}`,
@@ -363,7 +414,7 @@ export default function QuizQuestionBuilderScreen({
             .map((item) => String(item.token ?? "").trim().toUpperCase())
             .filter((token) => token.length > 0)
         : [];
-      setStudentTokens(tokens);
+      setStudentTokens((prev) => (areStringArraysEqual(prev, tokens) ? prev : tokens));
       if (!silent) {
         setStatusLine(tr(language, "Builder kuis tersinkron dari backend.", "Quiz builder synced from backend."));
       }
@@ -438,6 +489,16 @@ export default function QuizQuestionBuilderScreen({
   );
 
   const generateDraftInputs = useCallback(() => {
+    if (!selectedQuiz) {
+      setStatusLine(
+        tr(
+          language,
+          "Pilih kuis target dulu sebelum membuat form soal.",
+          "Select a target quiz before generating question forms."
+        )
+      );
+      return;
+    }
     if (questionSlotsLeft <= 0) {
       setStatusLine(
         tr(
@@ -467,7 +528,7 @@ export default function QuizQuestionBuilderScreen({
     setStatusLine(
       tr(language, `Form soal dibuat: ${clamped} item.`, `Question forms generated: ${clamped} items.`)
     );
-  }, [animateLayout, language, questionCountInput, questionDrafts, questionSlotsLeft]);
+  }, [animateLayout, language, questionCountInput, questionDrafts, questionSlotsLeft, selectedQuiz]);
 
   const buildOptionsPayload = useCallback(
     (draft: QuestionDraft, draftIndex: number) => {
@@ -552,6 +613,16 @@ export default function QuizQuestionBuilderScreen({
       setStatusLine(tr(language, "Backend belum terhubung.", "Backend is not connected."));
       return;
     }
+    if (!selectedQuiz) {
+      setStatusLine(
+        tr(
+          language,
+          "Pilih kuis target sebelum submit batch soal.",
+          "Select a target quiz before submitting the question batch."
+        )
+      );
+      return;
+    }
     if (questionDrafts.length === 0) {
       setStatusLine(
         tr(language, "Generate form soal dulu sebelum submit.", "Generate question forms before submitting.")
@@ -596,11 +667,14 @@ export default function QuizQuestionBuilderScreen({
             )
           );
         }
+        const pointsValue = Number.parseInt(draft.points, 10);
+        const points =
+          Number.isFinite(pointsValue) && pointsValue > 0 ? Math.min(pointsValue, 1000) : 1;
         return {
           subject_id: subjectId,
           question_text: questionText,
           question_type: draft.questionType,
-          points: 1,
+          points,
           ordering: activeQuestionCount + index + 1,
           options: buildOptionsPayload(draft, index),
         };
@@ -651,6 +725,7 @@ export default function QuizQuestionBuilderScreen({
     questionSlotsLeft,
     refreshContext,
     sessionId,
+    selectedQuiz,
     subjectIdInput,
   ]);
 
@@ -659,11 +734,15 @@ export default function QuizQuestionBuilderScreen({
       setStatusLine(tr(language, "Belum ada draft soal.", "No question drafts yet."));
       return;
     }
+    const subjectLabel = selectedQuiz
+      ? `${selectedQuiz.subjectCode} - ${selectedQuiz.subjectName}`
+      : "-";
     const lines: string[] = [
       "# Quiz Draft Snapshot",
       "",
       `- Session ID: ${sessionId}`,
       `- Subject ID: ${subjectIdInput || "-"}`,
+      `- Subject: ${subjectLabel}`,
       `- Draft Count: ${questionDrafts.length}`,
       `- Generated At: ${new Date().toISOString()}`,
       "",
@@ -678,6 +757,7 @@ export default function QuizQuestionBuilderScreen({
       if (draft.optionC) lines.push(`   - C: ${draft.optionC}`);
       if (draft.optionD) lines.push(`   - D: ${draft.optionD}`);
       if (draft.correctKeys) lines.push(`   - Answer Keys: ${draft.correctKeys}`);
+      lines.push(`   - Points: ${draft.points || "1"}`);
       lines.push("");
     });
     const markdown = lines.join("\n");
@@ -725,7 +805,16 @@ export default function QuizQuestionBuilderScreen({
         setStatusLine(tr(language, `Upload Drive gagal: ${message}`, `Drive upload failed: ${message}`));
       }
     }
-  }, [accessSignature, backendBaseUrl, language, onLog, questionDrafts, sessionId, subjectIdInput]);
+  }, [
+    accessSignature,
+    backendBaseUrl,
+    language,
+    onLog,
+    questionDrafts,
+    selectedQuiz,
+    sessionId,
+    subjectIdInput,
+  ]);
 
   const setQuizAssignment = useCallback(
     async (tokenValue: string, assigned: boolean) => {
@@ -904,9 +993,33 @@ export default function QuizQuestionBuilderScreen({
           {tr(language, "Total soal aktif", "Active questions")}: {activeQuestionCount}/40 (
           {tr(language, "sisa", "left")} {questionSlotsLeft})
         </Text>
-        <TerminalInput value={subjectIdInput} onChangeText={setSubjectIdInput} label={tr(language, "Subject ID", "Subject ID")} placeholder="1" keyboardType="number-pad" />
+        <Text style={styles.helperText}>
+          {selectedQuiz
+            ? tr(
+                language,
+                `Target: #${selectedQuiz.id} ${selectedQuiz.subjectCode} - ${selectedQuiz.subjectName}`,
+                `Target: #${selectedQuiz.id} ${selectedQuiz.subjectCode} - ${selectedQuiz.subjectName}`
+              )
+            : tr(
+                language,
+                "Pilih kuis target dari daftar di bawah sebelum membuat soal.",
+                "Pick a target quiz from the list below before building questions."
+              )}
+        </Text>
+        <TerminalInput
+          value={subjectIdInput}
+          onChangeText={setSubjectIdInput}
+          label={tr(language, "Target Subject ID", "Target Subject ID")}
+          placeholder="1"
+          keyboardType="number-pad"
+        />
         <TerminalInput value={questionCountInput} onChangeText={setQuestionCountInput} label={tr(language, "Jumlah Soal", "Question Count")} placeholder="10" keyboardType="number-pad" />
-        <TerminalButton label={tr(language, "Generate Form Soal", "Generate Question Forms")} variant="outline" onPress={generateDraftInputs} disabled={loading} />
+        <TerminalButton
+          label={tr(language, "Generate Form Soal", "Generate Question Forms")}
+          variant="outline"
+          onPress={generateDraftInputs}
+          disabled={loading || !hasSelectedQuiz}
+        />
       </View>
 
       <View style={styles.card}>
@@ -928,7 +1041,7 @@ export default function QuizQuestionBuilderScreen({
         <TerminalButton
           label={tr(language, "Submit Batch Soal", "Submit Question Batch")}
           onPress={() => void submitQuestionBatch()}
-          disabled={loading || questionDrafts.length === 0}
+          disabled={loading || questionDrafts.length === 0 || !hasSelectedQuiz}
         />
       </View>
 
@@ -1001,8 +1114,12 @@ export default function QuizQuestionBuilderScreen({
         {savedQuizzes.length > 0 ? (
           savedQuizzes.map((quiz) => {
             const isAssigned = assignedTokens.length > 0;
+            const isSelected = selectedQuizId === quiz.id;
             return (
-              <View key={quiz.id} style={styles.savedQuizRow}>
+              <View
+                key={quiz.id}
+                style={[styles.savedQuizRow, isSelected ? styles.savedQuizRowSelected : null]}
+              >
                 <View style={styles.savedQuizHeader}>
                   <Text style={styles.resultToken}>
                     {quiz.subjectCode} - {quiz.subjectName}
@@ -1024,7 +1141,26 @@ export default function QuizQuestionBuilderScreen({
                       )
                     : tr(language, "Belum ada token yang terikat.", "No tokens are currently bound.")}
                 </Text>
+                {isSelected ? (
+                  <Text style={styles.resultMeta}>
+                    {tr(
+                      language,
+                      "Dipilih sebagai target builder.",
+                      "Selected as the builder target."
+                    )}
+                  </Text>
+                ) : null}
                 <View style={styles.inlineActions}>
+                  <TerminalButton
+                    label={
+                      isSelected
+                        ? tr(language, "Target Aktif", "Active Target")
+                        : tr(language, "Pilih Target", "Select Target")
+                    }
+                    variant={isSelected ? "solid" : "outline"}
+                    onPress={() => setSubjectIdInput(String(quiz.id))}
+                    disabled={loading}
+                  />
                   <TerminalButton
                     label={tr(language, "Hapus Kuis", "Delete Quiz")}
                     variant="outline"
@@ -1164,6 +1300,10 @@ const styles = StyleSheet.create({
   dropdownItemTextActive: { color: "#166534", fontFamily: "Montserrat-Bold" },
   tokenRow: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 8, marginBottom: 6 },
   savedQuizRow: { borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10, padding: 8, marginTop: 8, gap: 4 },
+  savedQuizRowSelected: {
+    borderColor: "rgba(34,197,94,0.55)",
+    backgroundColor: "rgba(34,197,94,0.08)",
+  },
   savedQuizHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   resultToken: { color: "#111827", fontFamily: "Montserrat-Bold", fontSize: 11, marginBottom: 2 },
   resultMeta: { color: "#6b7280", fontFamily: "Montserrat-Regular", fontSize: 10 },

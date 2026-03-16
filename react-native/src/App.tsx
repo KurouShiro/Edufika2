@@ -18,7 +18,7 @@ import QuizStudentScreen from "./screens/QuizStudentScreen";
 import QuizQuestionBuilderScreen, {
   type QuizQuestionBuilderCache,
 } from "./screens/QuizQuestionBuilderScreen";
-import QuizTeacherScreen from "./screens/QuizTeacherScreen";
+import QuizTeacherScreen, { type QuizTeacherCache } from "./screens/QuizTeacherScreen";
 import Register from "./screens/Register";
 import Settings from "./screens/Settings";
 import SplashScreen from "./screens/SplashScreen";
@@ -176,6 +176,7 @@ type AdminWorkspaceEntry = {
   studentTokenAdminContexts: Record<string, StudentTokenAdminContext>;
   backendMonitorItems: AdminTokenMonitorItem[];
   quizBuilderCache: QuizQuestionBuilderCache;
+  quizTeacherCache: QuizTeacherCache;
 };
 
 type AdminWorkspaceCache = {
@@ -198,6 +199,31 @@ const DEFAULT_QUIZ_BUILDER_CACHE: QuizQuestionBuilderCache = {
   questionCountInput: "1",
   questionDrafts: [],
   assignTokenInput: "",
+};
+const DEFAULT_QUIZ_TEACHER_CACHE: QuizTeacherCache = {
+  title: "Edufika In-App Quiz",
+  description: "",
+  durationMinutes: "60",
+  showResultsImmediately: true,
+  randomizeQuestions: false,
+  allowReview: true,
+  subjectCode: "",
+  subjectName: "",
+  subjectIdInput: "",
+  questionText: "",
+  questionType: "single_choice",
+  optionA: "",
+  optionB: "",
+  optionC: "",
+  optionD: "",
+  optionE: "",
+  optionF: "",
+  correctOptionKey: "A",
+  assignTokenInput: "",
+  accessMode: "",
+  tokenGateInput: "",
+  lockedStudentToken: "",
+  tokenConfirmed: false,
 };
 
 const defaultWhitelist = ["https://example.org", "https://school.ac.id/exam"];
@@ -344,6 +370,9 @@ function buildDefaultAdminWorkspaceEntry(): AdminWorkspaceEntry {
       questionDrafts: [],
       assignTokenInput: DEFAULT_QUIZ_BUILDER_CACHE.assignTokenInput,
     },
+    quizTeacherCache: {
+      ...DEFAULT_QUIZ_TEACHER_CACHE,
+    },
   };
 }
 
@@ -431,6 +460,79 @@ function normalizeAdminWorkspaceEntry(raw: unknown): AdminWorkspaceEntry {
         typeof cache.assignTokenInput === "string"
           ? cache.assignTokenInput
           : DEFAULT_QUIZ_BUILDER_CACHE.assignTokenInput,
+    };
+  }
+  if (isRecord(entry.quizTeacherCache)) {
+    const cache = entry.quizTeacherCache as QuizTeacherCache;
+    base.quizTeacherCache = {
+      title: typeof cache.title === "string" ? cache.title : DEFAULT_QUIZ_TEACHER_CACHE.title,
+      description:
+        typeof cache.description === "string" ? cache.description : DEFAULT_QUIZ_TEACHER_CACHE.description,
+      durationMinutes:
+        typeof cache.durationMinutes === "string"
+          ? cache.durationMinutes
+          : DEFAULT_QUIZ_TEACHER_CACHE.durationMinutes,
+      showResultsImmediately:
+        typeof cache.showResultsImmediately === "boolean"
+          ? cache.showResultsImmediately
+          : DEFAULT_QUIZ_TEACHER_CACHE.showResultsImmediately,
+      randomizeQuestions:
+        typeof cache.randomizeQuestions === "boolean"
+          ? cache.randomizeQuestions
+          : DEFAULT_QUIZ_TEACHER_CACHE.randomizeQuestions,
+      allowReview:
+        typeof cache.allowReview === "boolean"
+          ? cache.allowReview
+          : DEFAULT_QUIZ_TEACHER_CACHE.allowReview,
+      subjectCode:
+        typeof cache.subjectCode === "string" ? cache.subjectCode : DEFAULT_QUIZ_TEACHER_CACHE.subjectCode,
+      subjectName:
+        typeof cache.subjectName === "string" ? cache.subjectName : DEFAULT_QUIZ_TEACHER_CACHE.subjectName,
+      subjectIdInput:
+        typeof cache.subjectIdInput === "string"
+          ? cache.subjectIdInput
+          : DEFAULT_QUIZ_TEACHER_CACHE.subjectIdInput,
+      questionText:
+        typeof cache.questionText === "string"
+          ? cache.questionText
+          : DEFAULT_QUIZ_TEACHER_CACHE.questionText,
+      questionType:
+        cache.questionType === "single_choice" ||
+        cache.questionType === "multiple_correct" ||
+        cache.questionType === "true_false" ||
+        cache.questionType === "matching"
+          ? cache.questionType
+          : DEFAULT_QUIZ_TEACHER_CACHE.questionType,
+      optionA: typeof cache.optionA === "string" ? cache.optionA : DEFAULT_QUIZ_TEACHER_CACHE.optionA,
+      optionB: typeof cache.optionB === "string" ? cache.optionB : DEFAULT_QUIZ_TEACHER_CACHE.optionB,
+      optionC: typeof cache.optionC === "string" ? cache.optionC : DEFAULT_QUIZ_TEACHER_CACHE.optionC,
+      optionD: typeof cache.optionD === "string" ? cache.optionD : DEFAULT_QUIZ_TEACHER_CACHE.optionD,
+      optionE: typeof cache.optionE === "string" ? cache.optionE : DEFAULT_QUIZ_TEACHER_CACHE.optionE,
+      optionF: typeof cache.optionF === "string" ? cache.optionF : DEFAULT_QUIZ_TEACHER_CACHE.optionF,
+      correctOptionKey:
+        typeof cache.correctOptionKey === "string"
+          ? cache.correctOptionKey
+          : DEFAULT_QUIZ_TEACHER_CACHE.correctOptionKey,
+      assignTokenInput:
+        typeof cache.assignTokenInput === "string"
+          ? cache.assignTokenInput
+          : DEFAULT_QUIZ_TEACHER_CACHE.assignTokenInput,
+      accessMode:
+        cache.accessMode === "token" || cache.accessMode === "basic" || cache.accessMode === ""
+          ? cache.accessMode
+          : DEFAULT_QUIZ_TEACHER_CACHE.accessMode,
+      tokenGateInput:
+        typeof cache.tokenGateInput === "string"
+          ? cache.tokenGateInput
+          : DEFAULT_QUIZ_TEACHER_CACHE.tokenGateInput,
+      lockedStudentToken:
+        typeof cache.lockedStudentToken === "string"
+          ? cache.lockedStudentToken
+          : DEFAULT_QUIZ_TEACHER_CACHE.lockedStudentToken,
+      tokenConfirmed:
+        typeof cache.tokenConfirmed === "boolean"
+          ? cache.tokenConfirmed
+          : DEFAULT_QUIZ_TEACHER_CACHE.tokenConfirmed,
     };
   }
 
@@ -821,6 +923,9 @@ export default function App() {
     questionDrafts: [],
     assignTokenInput: DEFAULT_QUIZ_BUILDER_CACHE.assignTokenInput,
   }));
+  const [quizTeacherCache, setQuizTeacherCache] = useState<QuizTeacherCache>(() => ({
+    ...DEFAULT_QUIZ_TEACHER_CACHE,
+  }));
   const [revokeTokenInput, setRevokeTokenInput] = useState("");
   const [revokeTokenStatus, setRevokeTokenStatus] = useState(
     tr("id", "Masukkan token siswa untuk revoke.", "Enter a student token to revoke.")
@@ -937,6 +1042,7 @@ export default function App() {
     setStudentTokenAdminContexts(entry.studentTokenAdminContexts);
     setBackendMonitorItems(entry.backendMonitorItems);
     setQuizBuilderCache(entry.quizBuilderCache);
+    setQuizTeacherCache(entry.quizTeacherCache);
   };
 
   const buildAdminWorkspaceEntry = (): AdminWorkspaceEntry => ({
@@ -959,6 +1065,7 @@ export default function App() {
     studentTokenAdminContexts,
     backendMonitorItems,
     quizBuilderCache,
+    quizTeacherCache,
   });
 
   const hydrateAdminWorkspaceForToken = (
@@ -1202,6 +1309,7 @@ export default function App() {
     tokenLaunchUrlInput,
     tokenPinPolicies,
     quizBuilderCache,
+    quizTeacherCache,
   ]);
 
   useEffect(() => {
@@ -3143,6 +3251,10 @@ export default function App() {
         onTokenLogin={() => setScreen("TokenLogin")}
         onQuizLogin={() => setScreen("UserLogin")}
         onOpenSettings={() => openSettingsFrom("LoginSelection")}
+        onExitApp={() => {
+          runSecurityCall(() => securityModule?.exitApp?.());
+          BackHandler.exitApp();
+        }}
       />
     );
   }
@@ -3157,10 +3269,7 @@ export default function App() {
         onSubmit={handleLogin}
         onOpenSettings={() => openSettingsFrom("TokenLogin")}
         onClearAdminCache={clearAdminWorkspaceFromLogin}
-        onExitApp={() => {
-          runSecurityCall(() => securityModule?.exitApp?.());
-          BackHandler.exitApp();
-        }}
+        onExitToSelection={() => setScreen("LoginSelection")}
       />
     );
   }
@@ -3252,6 +3361,8 @@ export default function App() {
         accessSignature={studentBackendAccessSignature}
         onLog={addLog}
         onBack={() => setScreen(quizEntryScreen)}
+        kioskEnabled={kioskEnabled}
+        onSetKioskEnabled={setKioskEnabled}
         showIntegrityWarning={showIntegrityWarning}
         integrityMessage={integrityMessage}
         onDismissIntegrityWarning={() => setShowIntegrityWarning(false)}
@@ -4242,6 +4353,8 @@ export default function App() {
         backendBaseUrl={backendBaseUrl}
         sessionId={adminBackendSessionId}
         accessSignature={adminBackendAccessSignature}
+        cache={quizTeacherCache}
+        onCacheChange={setQuizTeacherCache}
         onLog={addLog}
         onOpenQuestionBuilder={() => setScreen("QuizQuestionBuilderScreen")}
         onBack={() => setScreen("AdminDashboardPanel")}

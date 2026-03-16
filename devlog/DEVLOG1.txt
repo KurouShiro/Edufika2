@@ -1,0 +1,7 @@
+< Project Edufika Development Log #1>
+Date : 16-3-2026 
+Report Writer : George Shawn Mathew Mandagi
+-------------#
+Dev notes : 
+"The application's development is going as intended however there are a few small bugs and mishaps that needs to be cleaned up.
+implementation of basic auth login using SQL as a database has been implemented successfully. Current tests results center around live in-app exam tests.

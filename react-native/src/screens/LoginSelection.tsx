@@ -8,6 +8,7 @@ type LoginSelectionProps = {
   onTokenLogin: () => void;
   onQuizLogin: () => void;
   onOpenSettings?: () => void;
+  onExitApp: () => void;
 };
 
 export default function LoginSelection({
@@ -15,6 +16,7 @@ export default function LoginSelection({
   onTokenLogin,
   onQuizLogin,
   onOpenSettings,
+  onExitApp,
 }: LoginSelectionProps) {
   return (
     <Layout
@@ -53,6 +55,11 @@ export default function LoginSelection({
           <Pressable style={styles.secondaryButton} onPress={onQuizLogin}>
             <Text style={styles.secondaryText}>
               {tr(language, "Login Kuis In-App", "In-App Quiz Login")}
+            </Text>
+          </Pressable>
+          <Pressable style={styles.exitButton} onPress={onExitApp}>
+            <Text style={styles.exitButtonText}>
+              {tr(language, "Keluar Aplikasi", "Exit App")}
             </Text>
           </Pressable>
           <Text style={styles.captionText}>
@@ -148,6 +155,20 @@ const styles = StyleSheet.create({
   },
   secondaryText: {
     color: "#4b5563",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 10,
+    letterSpacing: 0.9,
+  },
+  exitButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.warningSoft,
+    backgroundColor: "#ffffff",
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  exitButtonText: {
+    color: palette.warning,
     fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 0.9,

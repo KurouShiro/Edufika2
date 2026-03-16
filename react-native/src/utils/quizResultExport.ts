@@ -61,20 +61,34 @@ async function requestStoragePermission(): Promise<boolean> {
   }
 }
 
-async function resolveQuizResultDirectory(): Promise<{ folderPath: string; usedExternal: boolean }> {
+async function resolveResultDirectory(
+  folderName: string,
+  promptForPermission: boolean
+): Promise<{ folderPath: string; usedExternal: boolean }> {
   const prefersExternal = Platform.OS === "android";
   let basePath = RNFS.DocumentDirectoryPath;
   let usedExternal = false;
 
   if (prefersExternal) {
-    const granted = await requestStoragePermission();
+    let granted = false;
+    try {
+      granted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
+    } catch {
+      granted = false;
+    }
+    if (!granted && promptForPermission) {
+      granted = await requestStoragePermission();
+    }
     if (granted && RNFS.ExternalStorageDirectoryPath) {
       basePath = RNFS.ExternalStorageDirectoryPath;
+      usedExternal = true;
+    } else if (RNFS.ExternalDirectoryPath) {
+      basePath = RNFS.ExternalDirectoryPath;
       usedExternal = true;
     }
   }
 
-  const folderPath = `${basePath}/QuizResult`;
+  const folderPath = `${basePath}/${folderName}`;
   await RNFS.mkdir(folderPath);
   return { folderPath, usedExternal };
 }
@@ -133,16 +147,61 @@ export function buildQuizResultMarkdown(payload: QuizResultMarkdownPayload): str
   return [...headerLines, ...studentLines, ...resultLines, ""].join("\n");
 }
 
+async function saveResultFile(options: {
+  content: string;
+  fileName: string;
+  extension: "md" | "txt";
+  folderName: string;
+  promptForPermission: boolean;
+}): Promise<SaveMarkdownResult> {
+  const { folderPath, usedExternal } = await resolveResultDirectory(
+    options.folderName,
+    options.promptForPermission
+  );
+  const safeName = sanitizeFileName(options.fileName).replace(new RegExp(`\\.${options.extension}$`, "i"), "");
+  const finalName = `${safeName}.${options.extension}`;
+  const path = `${folderPath}/${finalName}`;
+  await RNFS.writeFile(path, options.content, "utf8");
+  return { path, fileName: finalName, folderPath, usedExternal };
+}
+
 export async function saveMarkdownToQuizResult(
   markdown: string,
   fileName: string
 ): Promise<SaveMarkdownResult> {
-  const { folderPath, usedExternal } = await resolveQuizResultDirectory();
-  const safeName = sanitizeFileName(fileName).replace(/\.md$/i, "");
-  const finalName = `${safeName}.md`;
-  const path = `${folderPath}/${finalName}`;
-  await RNFS.writeFile(path, markdown, "utf8");
-  return { path, fileName: finalName, folderPath, usedExternal };
+  return saveResultFile({
+    content: markdown,
+    fileName,
+    extension: "md",
+    folderName: "QuizResult",
+    promptForPermission: true,
+  });
+}
+
+export async function saveTextToQuizResult(
+  text: string,
+  fileName: string
+): Promise<SaveMarkdownResult> {
+  return saveResultFile({
+    content: text,
+    fileName,
+    extension: "txt",
+    folderName: "QuizResult",
+    promptForPermission: true,
+  });
+}
+
+export async function saveTextToExamResult(
+  text: string,
+  fileName: string
+): Promise<SaveMarkdownResult> {
+  return saveResultFile({
+    content: text,
+    fileName,
+    extension: "txt",
+    folderName: "ExamResult",
+    promptForPermission: false,
+  });
 }
 
 export async function uploadMarkdownToDrive(options: {
