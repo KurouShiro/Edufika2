@@ -13,10 +13,12 @@ type DeveloperAccessScreenProps = {
   kioskEnabled: boolean;
   violationSystemEnabled: boolean;
   splitScreenDetectionEnabled: boolean;
+  screenshotAccessibilityEnabled: boolean;
   onUnlock: () => void;
   onToggleKiosk: (value: boolean) => void;
   onToggleViolationSystem: (value: boolean) => void;
   onToggleSplitScreenDetection: (value: boolean) => void;
+  onToggleScreenshotAccessibility: (value: boolean) => void;
   browserUrl: string;
   onBrowserUrlChange: (value: string) => void;
   developerClaimTokenInput: string;
@@ -46,10 +48,12 @@ export default function DeveloperAccessScreen({
   kioskEnabled,
   violationSystemEnabled,
   splitScreenDetectionEnabled,
+  screenshotAccessibilityEnabled,
   onUnlock,
   onToggleKiosk,
   onToggleViolationSystem,
   onToggleSplitScreenDetection,
+  onToggleScreenshotAccessibility,
   browserUrl,
   onBrowserUrlChange,
   developerClaimTokenInput,
@@ -255,6 +259,20 @@ export default function DeveloperAccessScreen({
               disabled={!unlocked}
               trackColor={{ false: "#d1d5db", true: "rgba(34,197,94,0.35)" }}
               thumbColor={splitScreenDetectionEnabled ? palette.neon : "#94a3b8"}
+            />
+          </View>
+          <View style={terminalStyles.row}>
+            <Text style={terminalStyles.bodyText}>
+              {screenshotAccessibilityEnabled
+                ? tr(language, "Akses Screenshot Diizinkan", "Screenshot Access Allowed")
+                : tr(language, "Akses Screenshot Diblokir", "Screenshot Access Blocked")}
+            </Text>
+            <Switch
+              value={screenshotAccessibilityEnabled}
+              onValueChange={onToggleScreenshotAccessibility}
+              disabled={!unlocked}
+              trackColor={{ false: "#d1d5db", true: "rgba(34,197,94,0.35)" }}
+              thumbColor={screenshotAccessibilityEnabled ? palette.neon : "#94a3b8"}
             />
           </View>
         </View>

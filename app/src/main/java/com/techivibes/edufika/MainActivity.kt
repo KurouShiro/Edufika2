@@ -99,15 +99,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (shouldLaunchReactNativeUi()) {
+            setStartupPermissionGateActive(true)
             markRnBootPending()
             startActivity(Intent(this, ReactNativeHostActivity::class.java))
             finish()
             return
         }
-        window.setFlags(
-            WindowManager.LayoutParams.FLAG_SECURE,
-            WindowManager.LayoutParams.FLAG_SECURE
-        )
+        setStartupPermissionGateActive(false)
+        applyScreenshotAccessibility()
         setContentView(R.layout.activity_main)
         sessionLogger = SessionLogger(this)
 
@@ -152,11 +151,13 @@ class MainActivity : AppCompatActivity() {
         } else {
             HeartbeatService.stop(this)
         }
-        resetKioskModeForNewLaunch()
+        applyScreenshotAccessibility()
         startSessionExpiryWatcher()
 
-        if (isKioskModeEnabled()) {
+        if (shouldApplyKioskMode()) {
             ScreenLock.apply(this)
+        } else {
+            runCatching { ScreenLock.clear(this) }
         }
     }
 
@@ -170,12 +171,15 @@ class MainActivity : AppCompatActivity() {
         } else {
             HeartbeatService.stop(this)
         }
+        applyScreenshotAccessibility()
         startSessionExpiryWatcher()
-        if (isKioskModeEnabled()) {
+        if (shouldApplyKioskMode()) {
             ScreenLock.apply(this)
             if (isSplitScreenDetectionEnabled() && isViolationSystemEnabled()) {
                 enforceSingleWindowMode("onResume")
             }
+        } else {
+            runCatching { ScreenLock.clear(this) }
         }
     }
 
@@ -204,7 +208,7 @@ class MainActivity : AppCompatActivity() {
             clearFocusLossLockCheck()
             return
         }
-        if (isKioskModeEnabled() && isViolationSystemEnabled() && isSplitScreenDetectionEnabled()) {
+        if (shouldApplyKioskMode() && isViolationSystemEnabled() && isSplitScreenDetectionEnabled()) {
             scheduleFocusLossLockCheck("onWindowFocusChanged")
         }
     }
@@ -216,7 +220,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (
             isInMultiWindowMode &&
-            isKioskModeEnabled() &&
+            shouldApplyKioskMode() &&
             isViolationSystemEnabled() &&
             isSplitScreenDetectionEnabled()
         ) {
@@ -407,6 +411,35 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun isStartupPermissionGateActive(): Boolean {
+        return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE).getBoolean(
+            TestConstants.PREF_STARTUP_PERMISSION_GATE_ACTIVE,
+            false
+        )
+    }
+
+    private fun shouldApplyKioskMode(): Boolean {
+        return isKioskModeEnabled() && !isStartupPermissionGateActive()
+    }
+
+    private fun isScreenshotAccessibilityEnabled(): Boolean {
+        return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE).getBoolean(
+            TestConstants.PREF_SCREENSHOT_ACCESS_ENABLED,
+            false
+        )
+    }
+
+    private fun applyScreenshotAccessibility() {
+        if (isScreenshotAccessibilityEnabled()) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE
+            )
+        }
+    }
+
     private fun isViolationSystemEnabled(): Boolean {
         return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE).getBoolean(
             TestConstants.PREF_VIOLATION_SYSTEM_ENABLED,
@@ -429,10 +462,10 @@ class MainActivity : AppCompatActivity() {
         return until > System.currentTimeMillis()
     }
 
-    private fun resetKioskModeForNewLaunch() {
+    private fun setStartupPermissionGateActive(enabled: Boolean) {
         getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
             .edit()
-            .putBoolean(TestConstants.PREF_APP_LOCK_ENABLED, true)
+            .putBoolean(TestConstants.PREF_STARTUP_PERMISSION_GATE_ACTIVE, enabled)
             .apply()
     }
 

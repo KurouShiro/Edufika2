@@ -9,6 +9,13 @@ type ExamSelectionScreenProps = {
   onManualInput: () => void;
   onOpenQuiz: () => void;
   showQuizOption: boolean;
+  driveHealthLoading: boolean;
+  driveHealthChecked: boolean;
+  driveHealthConnected: boolean;
+  driveHealthConfigured: boolean;
+  driveHealthFolderName: string;
+  driveHealthError: string;
+  onRefreshDriveHealth: () => void;
   onLogout: () => void;
   onOpenSettings: () => void;
 };
@@ -19,6 +26,13 @@ export default function ExamSelectionScreen({
   onManualInput,
   onOpenQuiz,
   showQuizOption,
+  driveHealthLoading,
+  driveHealthChecked,
+  driveHealthConnected,
+  driveHealthConfigured,
+  driveHealthFolderName,
+  driveHealthError,
+  onRefreshDriveHealth,
   onLogout,
   onOpenSettings,
 }: ExamSelectionScreenProps) {
@@ -74,6 +88,47 @@ export default function ExamSelectionScreen({
           </View>
         </Pressable>
       ) : null}
+
+      <View style={styles.healthCard}>
+        <Text style={styles.healthTitle}>{tr(language, "Google Drive Health", "Google Drive Health")}</Text>
+        <Text style={styles.healthText}>
+          {driveHealthLoading
+            ? tr(
+                language,
+                "Mengecek koneksi Google Drive...",
+                "Checking Google Drive connection..."
+              )
+            : driveHealthConnected
+              ? tr(
+                  language,
+                  `Google Drive terhubung. Folder aktif: ${driveHealthFolderName || "QuizData"}.`,
+                  `Google Drive connected. Active folder: ${driveHealthFolderName || "QuizData"}.`
+                )
+              : !driveHealthChecked
+                ? tr(
+                    language,
+                    "Status Google Drive belum diperiksa.",
+                    "Google Drive status has not been checked yet."
+                  )
+                : !driveHealthConfigured
+                  ? tr(
+                      language,
+                      "Google Drive belum dikonfigurasi di backend.",
+                      "Google Drive is not configured on the backend."
+                    )
+                  : tr(
+                      language,
+                      `Google Drive bermasalah: ${driveHealthError || "unknown error"}`,
+                      `Google Drive issue: ${driveHealthError || "unknown error"}`
+                    )}
+        </Text>
+        <TerminalButton
+          label={tr(language, "Refresh Drive Health", "Refresh Drive Health")}
+          variant="outline"
+          onPress={onRefreshDriveHealth}
+          disabled={driveHealthLoading}
+        />
+      </View>
 
       <View style={styles.disclaimer}>
         <Text style={styles.disclaimerText}>
@@ -163,6 +218,26 @@ const styles = StyleSheet.create({
     fontFamily: "Montserrat-Regular",
     fontSize: 9,
     lineHeight: 14,
+  },
+  healthCard: {
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 16,
+    backgroundColor: "#ffffff",
+    padding: 12,
+    marginBottom: 10,
+    gap: 8,
+  },
+  healthTitle: {
+    color: "#1f2937",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 11,
+  },
+  healthText: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-Regular",
+    fontSize: 10,
+    lineHeight: 15,
   },
   footerActions: {
     gap: 0,

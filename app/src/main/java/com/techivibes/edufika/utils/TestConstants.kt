@@ -17,6 +17,8 @@ object TestConstants {
     const val PREF_URL_WHITELIST = "pref_url_whitelist"
     const val PREF_SESSION_LOGS = "pref_session_logs"
     const val PREF_APP_LOCK_ENABLED = "pref_app_lock_enabled"
+    const val PREF_STARTUP_PERMISSION_GATE_ACTIVE = "pref_startup_permission_gate_active"
+    const val PREF_SCREENSHOT_ACCESS_ENABLED = "pref_screenshot_access_enabled"
     const val PREF_VIOLATION_SYSTEM_ENABLED = "pref_violation_system_enabled"
     const val PREF_SPLIT_SCREEN_DETECTION_ENABLED = "pref_split_screen_detection_enabled"
     const val PREF_PROCTOR_PIN = "pref_proctor_pin"

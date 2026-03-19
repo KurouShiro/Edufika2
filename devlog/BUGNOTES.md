@@ -1,27 +1,27 @@
-# Project Edufika Bug Reports && Feature Updates
- 1. App cannot be logged out after logging in. (Fixed)
- 2. Fake Kiosk mode cannot be disabled causing the user to be stuck. (Fixed)
- 3. UI is lackluster in design. (Refer to edufika-prototype folder in the future for UI design) (Fixed)
- 4. Token implementation is bugged, no configured Admin or Student login for debugging purposes. (Fixed)
- 5. QR feature is not working. (Fixed)
- 6. WebView functionality does not work, browser does not open after the QR code is scanned.(Fixed) 
- 7. UI bug ; App crashes when attempting to open React Native UI and the UI fails to open when prompted. (Fixed)
- 8. URL Whitelist functionality is missing in Admin Dashboard. (Fixed)
- 9. Kiosk Mode remains disabled after rebooting the app, Kiosk mode state should not persist betwen launches. (Fixed)
- 10. AdminID SHOULD NOT have access to DeveloperAccessPanel, that is reserved for developers only and can only be access through the secret passcode (EDU_DEV_ACCESS) (Fixed)
- 11. Violation detection bugs, the app detects a "violation" after failing to input the right proctor PIN number. This is an unintended bug. (Fixed)
- 12. Once student/admin has logged out, they should be allowed to exit the app. When the user (student/admin) logs out of their session, the application shuts down on it's own and disables Kiosk Mode until it's been rebooted again. They should also be able to exit the app in the session token login screen. Add an exit button that allows them to shutdown the app in that way. (Fixed)
- 13. RN UI bug : Keypad.tx is missing lowercase text option which is restricting it's ability to type lowercase letters. (Fixed)
- 14. DeveloperAccessPanel should have the ability to generate admin tokens for admin login. (Fixed)
- 15. Tokens should be configurable in Admin Dashboard when generated. They should have an expiry date that can be set by the admin during token generation. *Once the timer runs out, the user should be notified with a pop up that their time has run out and that they will be kicked out of the app automatically. (Fixed)
- 16. Add a function to Admin Dashboard to copy paste the generated token. (Fixed)
- 17. Store logger information locally in a logger.txt file that admins can access on their device and/or send to developers for data anaylsis. (Fixed)
- 18. Whitelisted URL data should be stored in the database for the app to refer to instead of being stored locally. (Fixed)
- 19. For the RN web browser screen, add a timer that indicates how much time left until their session token expires. (Fixed)
- 20. Proctor PIN is set only once during the start of the exams, stored in the database and is refreshed daily. Implement the RN UI, the functionality and the database schema (if needed) so that an admin can submit the PIN from Admin Dashboard and have it be stored in the database. (Fixed)
- 21. Compute heartbeat/risk locally for the full session (for low latency, no network false positives).
-22. Keep periodic backend sync (every few seconds) when online, not only on logout/violation.
-23. Send critical events immediately (LOCKED, REVOKED, SCREEN_OFF, etc.), but enforce lock locally even before server ack.
-24. On offline mode, mark session DEGRADED locally, queue events, then reconcile on reconnect.
+﻿# Laporan Bug Proyek Edufika && Pembaruan Fitur
+ 1. Aplikasi tidak dapat logout setelah login. (Diperbaiki)
+ 2. Fake Kiosk mode tidak dapat dinonaktifkan sehingga pengguna terjebak. (Diperbaiki)
+ 3. Desain UI masih terasa kurang matang. (Lihat folder `edufika-prototype` di masa depan untuk referensi desain UI) (Diperbaiki)
+ 4. Implementasi token bermasalah, belum ada login Admin atau Student yang terkonfigurasi untuk kebutuhan debugging. (Diperbaiki)
+ 5. Fitur QR tidak berfungsi. (Diperbaiki)
+ 6. Fungsionalitas WebView tidak berjalan, browser tidak terbuka setelah kode QR dipindai. (Diperbaiki)
+ 7. Bug UI; aplikasi crash saat mencoba membuka UI React Native dan UI gagal terbuka saat dipanggil. (Diperbaiki)
+ 8. Fungsi URL Whitelist belum ada di Admin Dashboard. (Diperbaiki)
+ 9. Kiosk Mode tetap nonaktif setelah aplikasi di-reboot, status Kiosk Mode seharusnya tidak persisten antar peluncuran. (Diperbaiki)
+ 10. AdminID TIDAK BOLEH memiliki akses ke DeveloperAccessPanel; panel itu khusus developer dan hanya dapat diakses melalui passcode rahasia (`EDU_DEV_ACCESS`). (Diperbaiki)
+ 11. Bug deteksi violation; aplikasi mendeteksi "violation" setelah gagal memasukkan PIN proktor yang benar. Ini adalah bug yang tidak diinginkan. (Diperbaiki)
+ 12. Setelah student/admin logout, mereka harus diizinkan keluar dari aplikasi. Saat pengguna (student/admin) logout dari sesi mereka, aplikasi saat ini mati sendiri dan menonaktifkan Kiosk Mode sampai aplikasi di-reboot kembali. Mereka juga harus dapat keluar dari aplikasi dari layar login token sesi. Tambahkan tombol exit yang memungkinkan aplikasi dimatikan dengan cara tersebut. (Diperbaiki)
+ 13. Bug UI RN: `Keypad.tsx` belum memiliki opsi huruf kecil sehingga membatasi kemampuan mengetik huruf kecil. (Diperbaiki)
+ 14. DeveloperAccessPanel harus memiliki kemampuan untuk menghasilkan admin token bagi login admin. (Diperbaiki)
+ 15. Token harus dapat dikonfigurasi di Admin Dashboard saat dibuat. Token harus memiliki tanggal kedaluwarsa yang bisa diatur oleh admin saat pembuatan token. *Begitu waktu habis, pengguna harus diberi notifikasi pop-up bahwa waktu mereka habis dan mereka akan dikeluarkan dari aplikasi secara otomatis. (Diperbaiki)
+ 16. Tambahkan fungsi di Admin Dashboard untuk copy-paste token yang dihasilkan. (Diperbaiki)
+ 17. Simpan informasi logger secara lokal dalam file `logger.txt` agar admin dapat mengaksesnya di perangkat dan/atau mengirimkannya ke developer untuk analisis data. (Diperbaiki)
+ 18. Data URL yang di-whitelist harus disimpan di database agar aplikasi merujuk ke sana, bukan disimpan secara lokal. (Diperbaiki)
+ 19. Untuk layar web browser RN, tambahkan timer yang menunjukkan sisa waktu sampai session token kedaluwarsa. (Diperbaiki)
+ 20. Proctor PIN hanya di-set sekali saat awal ujian, disimpan di database, dan diperbarui setiap hari. Implementasikan UI RN, fungsionalitas, dan skema database (jika diperlukan) agar admin dapat mengirim PIN dari Admin Dashboard dan menyimpannya di database. (Diperbaiki)
+ 21. Hitung heartbeat/risk secara lokal untuk seluruh sesi (latensi rendah, tanpa false positive jaringan).
+ 22. Pertahankan sinkronisasi backend periodik (setiap beberapa detik) saat online, bukan hanya saat logout/pelanggaran.
+ 23. Kirim event kritis segera (`LOCKED`, `REVOKED`, `SCREEN_OFF`, dll.), tetapi penegakan lock tetap dilakukan secara lokal bahkan sebelum ada ack server.
+ 24. Pada mode offline, tandai sesi sebagai `DEGRADED` secara lokal, antrekan event disimpan, lalu direkonsiliasi saat koneksi kembali.
 
- - * Notes : 15-02-2026
+ - * Catatan : 15-02-2026

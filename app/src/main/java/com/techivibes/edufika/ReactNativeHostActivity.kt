@@ -49,11 +49,10 @@ class ReactNativeHostActivity : ReactActivity() {
             // React Native activity should always bootstrap with null saved state.
             super.onCreate(null)
             SessionStateStore.restore()
-            resetKioskModeForNewLaunch()
-            window.setFlags(
-                WindowManager.LayoutParams.FLAG_SECURE,
-                WindowManager.LayoutParams.FLAG_SECURE
-            )
+            applyScreenshotAccessibility()
+            if (!shouldApplyKioskMode()) {
+                runCatching { ScreenLock.clear(this) }
+            }
             screenOffViolationTest = ScreenOffViolationTest(this) {
                 if (!isViolationSystemEnabled()) {
                     return@ScreenOffViolationTest
@@ -93,11 +92,14 @@ class ReactNativeHostActivity : ReactActivity() {
         clearRnBootPending()
         FocusMonitorState.hasWindowFocus = true
         FocusMonitorState.isMultiWindow = isInMultiWindowMode
-        if (isKioskModeEnabled()) {
+        applyScreenshotAccessibility()
+        if (shouldApplyKioskMode()) {
             ScreenLock.apply(this)
             if (isViolationSystemEnabled() && isSplitScreenDetectionEnabled()) {
                 enforceSingleWindowMode("onResume")
             }
+        } else {
+            runCatching { ScreenLock.clear(this) }
         }
     }
 
@@ -117,7 +119,7 @@ class ReactNativeHostActivity : ReactActivity() {
             clearFocusLossLockCheck()
             return
         }
-        if (isKioskModeEnabled() && isViolationSystemEnabled() && isSplitScreenDetectionEnabled()) {
+        if (shouldApplyKioskMode() && isViolationSystemEnabled() && isSplitScreenDetectionEnabled()) {
             scheduleFocusLossLockCheck("onWindowFocusChanged")
         }
     }
@@ -127,7 +129,7 @@ class ReactNativeHostActivity : ReactActivity() {
         FocusMonitorState.isMultiWindow = isInMultiWindowMode
         if (
             isInMultiWindowMode &&
-            isKioskModeEnabled() &&
+            shouldApplyKioskMode() &&
             isViolationSystemEnabled() &&
             isSplitScreenDetectionEnabled()
         ) {
@@ -258,6 +260,31 @@ class ReactNativeHostActivity : ReactActivity() {
             .getBoolean(TestConstants.PREF_APP_LOCK_ENABLED, true)
     }
 
+    private fun isStartupPermissionGateActive(): Boolean {
+        return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(TestConstants.PREF_STARTUP_PERMISSION_GATE_ACTIVE, false)
+    }
+
+    private fun shouldApplyKioskMode(): Boolean {
+        return isKioskModeEnabled() && !isStartupPermissionGateActive()
+    }
+
+    private fun isScreenshotAccessibilityEnabled(): Boolean {
+        return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(TestConstants.PREF_SCREENSHOT_ACCESS_ENABLED, false)
+    }
+
+    private fun applyScreenshotAccessibility() {
+        if (isScreenshotAccessibilityEnabled()) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE
+            )
+        }
+    }
+
     private fun isViolationSystemEnabled(): Boolean {
         return getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
             .getBoolean(TestConstants.PREF_VIOLATION_SYSTEM_ENABLED, true)
@@ -276,6 +303,7 @@ class ReactNativeHostActivity : ReactActivity() {
 
     private fun fallbackToNativeUi() {
         clearRnBootPending()
+        setStartupPermissionGateActive(false)
         val intent = Intent(this, MainActivity::class.java).apply {
             putExtra(MainActivity.EXTRA_SKIP_RN_UI_BOOT, true)
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -284,10 +312,10 @@ class ReactNativeHostActivity : ReactActivity() {
         finish()
     }
 
-    private fun resetKioskModeForNewLaunch() {
+    private fun setStartupPermissionGateActive(enabled: Boolean) {
         getSharedPreferences(TestConstants.PREFS_NAME, MODE_PRIVATE)
             .edit()
-            .putBoolean(TestConstants.PREF_APP_LOCK_ENABLED, true)
+            .putBoolean(TestConstants.PREF_STARTUP_PERMISSION_GATE_ACTIVE, enabled)
             .apply()
     }
 

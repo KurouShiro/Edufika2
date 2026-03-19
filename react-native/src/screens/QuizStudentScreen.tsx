@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppLanguage, tr } from "../i18n";
 import Layout, { TerminalButton, TerminalInput, palette } from "./Layout";
 import IntegrityWarningModal from "./IntegrityWarningModal";
 import {
   buildQuizResultMarkdown,
+  type DriveUploadError,
   saveTextToQuizResult,
   uploadMarkdownToDrive,
 } from "../utils/quizResultExport";
@@ -14,15 +15,23 @@ type QuizStudentScreenProps = {
   backendBaseUrl: string;
   sessionId: string;
   accessSignature: string;
+  driveHealthLoading?: boolean;
+  driveHealthChecked?: boolean;
+  driveHealthConnected?: boolean;
+  driveHealthConfigured?: boolean;
+  driveHealthFolderName?: string;
+  driveHealthError?: string;
+  onRefreshDriveHealth?: () => void;
   onBack: () => void;
   onLog: (message: string) => void;
-  kioskEnabled: boolean;
-  onSetKioskEnabled?: (value: boolean) => void;
+  riskScore?: number;
   showIntegrityWarning?: boolean;
   integrityMessage?: string;
   onDismissIntegrityWarning?: () => void;
   studentAccount?: StudentAccount | null;
   studentToken?: string;
+  violationHistory?: ViolationAuditRecord[];
+  violationRiskThreshold?: number;
 };
 
 type StudentAccount = {
@@ -77,6 +86,22 @@ type QuizFinishPayload = {
   }>;
 };
 
+type ViolationAuditRecord = {
+  timestamp: string;
+  type: string;
+  detail: string;
+  riskDelta: number;
+  source: "risk" | "native_lock";
+};
+
+type DriveExportState = {
+  phase: "idle" | "uploading" | "uploaded" | "failed";
+  folderName: string;
+  folderId: string;
+  errorMessage: string;
+  fileId: string;
+};
+
 function normalizeBackendBaseUrl(raw: string): string {
   return raw.trim().replace(/\/+$/, "");
 }
@@ -95,13 +120,23 @@ export default function QuizStudentScreen({
   backendBaseUrl,
   sessionId,
   accessSignature,
+  driveHealthLoading = false,
+  driveHealthChecked = false,
+  driveHealthConnected = false,
+  driveHealthConfigured = false,
+  driveHealthFolderName = "",
+  driveHealthError = "",
+  onRefreshDriveHealth,
   onBack,
   onLog,
+  riskScore = 0,
   showIntegrityWarning = false,
   integrityMessage = "",
   onDismissIntegrityWarning,
   studentAccount,
   studentToken,
+  violationHistory = [],
+  violationRiskThreshold = 12,
 }: QuizStudentScreenProps) {
   const [statusLine, setStatusLine] = useState(
     tr(language, "Klik Mulai Quiz untuk memuat soal.", "Tap Start Quiz to load questions.")
@@ -117,40 +152,13 @@ export default function QuizStudentScreen({
   const [studentName, setStudentName] = useState(studentAccount?.name ?? "");
   const [studentClass, setStudentClass] = useState(studentAccount?.studentClass ?? "");
   const [studentElective, setStudentElective] = useState(studentAccount?.elective ?? "");
-  const kioskOverrideRef = useRef<{ active: boolean; previous: boolean }>({
-    active: false,
-    previous: kioskEnabled,
+  const [driveExportState, setDriveExportState] = useState<DriveExportState>({
+    phase: "idle",
+    folderName: "",
+    folderId: "",
+    errorMessage: "",
+    fileId: "",
   });
-
-  const activateKioskOverride = useCallback(() => {
-    if (!onSetKioskEnabled) {
-      return;
-    }
-    if (!kioskOverrideRef.current.active) {
-      kioskOverrideRef.current = { active: true, previous: kioskEnabled };
-    }
-    onSetKioskEnabled(false);
-  }, [kioskEnabled, onSetKioskEnabled]);
-
-  const restoreKioskOverride = useCallback(() => {
-    if (!onSetKioskEnabled) {
-      return;
-    }
-    if (kioskOverrideRef.current.active) {
-      onSetKioskEnabled(kioskOverrideRef.current.previous);
-      kioskOverrideRef.current.active = false;
-    }
-  }, [onSetKioskEnabled]);
-
-  useEffect(() => {
-    if (finished) {
-      activateKioskOverride();
-      return;
-    }
-    restoreKioskOverride();
-  }, [activateKioskOverride, finished, restoreKioskOverride]);
-
-  useEffect(() => restoreKioskOverride, [restoreKioskOverride]);
 
   useEffect(() => {
     if (!studentAccount) {
@@ -172,6 +180,20 @@ export default function QuizStudentScreen({
       if (!quizMeta) {
         return;
       }
+      setDriveExportState({
+        phase: "uploading",
+        folderName: "",
+        folderId: "",
+        errorMessage: "",
+        fileId: "",
+      });
+      setStatusLine(
+        tr(
+          language,
+          "Menyimpan hasil quiz dan mengirim ke Google Drive...",
+          "Saving quiz result and uploading to Google Drive..."
+        )
+      );
       const resultItems = payload.result_items ?? [];
       const correctCount = resultItems.length > 0
         ? resultItems.filter((item) => item.is_correct).length
@@ -179,6 +201,9 @@ export default function QuizStudentScreen({
       const incorrectCount = resultItems.length > 0 ? resultItems.length - (correctCount ?? 0) : null;
       const questionCount = questions.length > 0 ? questions.length : resultItems.length;
       const fileNameBase = `${quizMeta.title || "quiz"}_${sessionId}_${Date.now()}`;
+      const hasViolationHistory = violationHistory.length > 0 || showIntegrityWarning;
+      const latestIntegrityMessage =
+        hasViolationHistory && integrityMessage.trim() ? integrityMessage.trim() : undefined;
       const markdown = buildQuizResultMarkdown({
         quizTitle: quizMeta.title || tr(language, "In-App Quiz", "In-App Quiz"),
         sessionId,
@@ -207,6 +232,20 @@ export default function QuizStudentScreen({
                 maxPoints: item.max_points,
               }))
             : undefined,
+        violationAudit: {
+          hasViolations: hasViolationHistory,
+          currentRiskScore: riskScore,
+          threshold: violationRiskThreshold,
+          warningTriggered: showIntegrityWarning,
+          latestMessage: latestIntegrityMessage,
+          records: [...violationHistory].reverse().map((item) => ({
+            timestamp: item.timestamp,
+            type: item.type,
+            detail: item.detail,
+            riskDelta: item.riskDelta,
+            source: item.source,
+          })),
+        },
         note: payload.show_results_immediately
           ? undefined
           : tr(
@@ -247,17 +286,45 @@ export default function QuizStudentScreen({
             correct: correctCount,
             incorrect: incorrectCount,
             student_name: studentAccount?.name ?? studentName.trim(),
+            student_class: studentAccount?.studentClass ?? studentClass.trim(),
+            student_elective: studentAccount?.elective ?? studentElective.trim(),
             student_username: studentAccount?.username,
+            student_school_year: studentAccount?.schoolYear,
+            student_token: studentToken,
+            has_violations: hasViolationHistory,
+            violation_count: violationHistory.length,
+            violation_types: Array.from(new Set(violationHistory.map((item) => item.type))).join(","),
+            risk_score: riskScore,
+            integrity_warning_triggered: showIntegrityWarning,
           },
         });
         if (uploaded.file_id) {
+          setDriveExportState({
+            phase: "uploaded",
+            folderName: uploaded.folder_name ?? "",
+            folderId: uploaded.folder_id ?? "",
+            errorMessage: "",
+            fileId: uploaded.file_id,
+          });
           onLog(`Quiz result uploaded to Drive: ${uploaded.file_id}`);
           setStatusLine(
-            tr(language, "Hasil terkirim ke Google Drive.", "Result uploaded to Google Drive.")
+            tr(
+              language,
+              `Hasil terkirim ke Google Drive${uploaded.folder_name ? ` ke folder ${uploaded.folder_name}` : ""}.`,
+              `Result uploaded to Google Drive${uploaded.folder_name ? ` to folder ${uploaded.folder_name}` : ""}.`
+            )
           );
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const driveError = error as DriveUploadError;
+        setDriveExportState({
+          phase: "failed",
+          folderName: driveError.folderName ?? "",
+          folderId: driveError.folderId ?? "",
+          errorMessage: message,
+          fileId: "",
+        });
         onLog(`Quiz result upload failed: ${message}`);
         if (!savedResult) {
           try {
@@ -301,6 +368,11 @@ export default function QuizStudentScreen({
       studentElective,
       studentName,
       studentToken,
+      riskScore,
+      showIntegrityWarning,
+      integrityMessage,
+      violationHistory,
+      violationRiskThreshold,
     ]
   );
 
@@ -336,6 +408,13 @@ export default function QuizStudentScreen({
       setQuizMeta(payload.quiz);
       setQuestions(payload.questions ?? []);
       setCurrentIndex(0);
+      setDriveExportState({
+        phase: "idle",
+        folderName: "",
+        folderId: "",
+        errorMessage: "",
+        fileId: "",
+      });
       const nextSelected: Record<number, number[]> = {};
       payload.existing_answers.forEach((entry) => {
         nextSelected[entry.question_id] = Array.isArray(entry.selected_option_ids)
@@ -444,7 +523,6 @@ export default function QuizStudentScreen({
       const payload = (await parseJsonResponse(response)) as QuizFinishPayload;
       setFinished(payload);
       setResultDetailsOpen(false);
-      activateKioskOverride();
       setStatusLine(
         tr(
           language,
@@ -541,6 +619,50 @@ export default function QuizStudentScreen({
               placeholder={tr(language, "Contoh: IPA / IPS", "Example: Science / Social")}
               editable={allowProfileEdit}
             />
+            <View style={styles.driveHealthCard}>
+              <Text style={styles.driveHealthTitle}>
+                {tr(language, "Google Drive Health", "Google Drive Health")}
+              </Text>
+              <Text style={styles.statusText}>
+                {driveHealthLoading
+                  ? tr(
+                      language,
+                      "Mengecek koneksi Google Drive...",
+                      "Checking Google Drive connection..."
+                    )
+                  : driveHealthConnected
+                    ? tr(
+                        language,
+                        `Google Drive terhubung. Folder aktif: ${driveHealthFolderName || "QuizData"}.`,
+                        `Google Drive connected. Active folder: ${driveHealthFolderName || "QuizData"}.`
+                      )
+                    : !driveHealthChecked
+                      ? tr(
+                          language,
+                          "Status Google Drive belum diperiksa.",
+                          "Google Drive status has not been checked yet."
+                        )
+                      : !driveHealthConfigured
+                        ? tr(
+                            language,
+                            "Google Drive belum dikonfigurasi di backend.",
+                            "Google Drive is not configured on the backend."
+                          )
+                        : tr(
+                            language,
+                            `Google Drive bermasalah: ${driveHealthError || "unknown error"}`,
+                            `Google Drive issue: ${driveHealthError || "unknown error"}`
+                          )}
+              </Text>
+              {onRefreshDriveHealth ? (
+                <TerminalButton
+                  label={tr(language, "Refresh Drive Health", "Refresh Drive Health")}
+                  variant="outline"
+                  onPress={onRefreshDriveHealth}
+                  disabled={driveHealthLoading}
+                />
+              ) : null}
+            </View>
             <Text style={styles.statusText}>{statusLine}</Text>
             <TerminalButton
               label={tr(language, "Mulai Quiz", "Start Quiz")}
@@ -611,6 +733,32 @@ export default function QuizStudentScreen({
             <Text style={styles.statusText}>
               {tr(language, "Durasi", "Duration")}: {finished.duration_seconds}s
             </Text>
+            <View style={styles.driveStatusCard}>
+              <Text style={styles.driveStatusTitle}>
+                {tr(language, "Status Google Drive", "Google Drive Status")}
+              </Text>
+              <Text style={styles.statusText}>{statusLine}</Text>
+              {driveExportState.folderName ? (
+                <Text style={styles.driveMetaText}>
+                  {tr(language, "Folder", "Folder")}: {driveExportState.folderName}
+                </Text>
+              ) : null}
+              {driveExportState.folderId ? (
+                <Text style={styles.driveMetaText}>
+                  {tr(language, "Folder ID", "Folder ID")}: {driveExportState.folderId}
+                </Text>
+              ) : null}
+              {driveExportState.fileId ? (
+                <Text style={styles.driveMetaText}>
+                  {tr(language, "File ID", "File ID")}: {driveExportState.fileId}
+                </Text>
+              ) : null}
+              {driveExportState.phase === "failed" && driveExportState.errorMessage ? (
+                <Text style={styles.driveErrorText}>
+                  {tr(language, "Error", "Error")}: {driveExportState.errorMessage}
+                </Text>
+              ) : null}
+            </View>
             {finished.show_results_immediately && finished.result_items.length > 0 ? (
               <>
                 <Pressable
@@ -747,6 +895,46 @@ const styles = StyleSheet.create({
     fontFamily: "Montserrat-SemiBold",
     fontSize: 16,
     marginBottom: 6,
+  },
+  driveHealthCard: {
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 12,
+    backgroundColor: "#f9fafb",
+    padding: 10,
+    marginBottom: 8,
+    gap: 6,
+  },
+  driveHealthTitle: {
+    color: "#111827",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 11,
+  },
+  driveStatusCard: {
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 12,
+    backgroundColor: "#f9fafb",
+    padding: 10,
+    marginBottom: 8,
+  },
+  driveStatusTitle: {
+    color: "#111827",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 11,
+    marginBottom: 4,
+  },
+  driveMetaText: {
+    color: "#4b5563",
+    fontFamily: "Montserrat-Regular",
+    fontSize: 10,
+    marginBottom: 2,
+  },
+  driveErrorText: {
+    color: "#b91c1c",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 10,
+    marginTop: 2,
   },
   resultDropdown: {
     borderWidth: 1,

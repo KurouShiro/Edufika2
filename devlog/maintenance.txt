@@ -1,79 +1,79 @@
-﻿Edufika Maintenance Guide
-========================
+﻿Panduan Maintenance Edufika
+===========================
 
-Purpose
--------
-This file is the single operational guide for setup, configuration, debugging, and maintenance of the Edufika project.
+Tujuan
+------
+File ini adalah panduan operasional tunggal untuk setup, konfigurasi, debugging, dan maintenance proyek Edufika.
 
-Project Scope
--------------
-- Android app (Kotlin + Java)
-- React Native UI layer (in `react-native/`)
-- Session backend API (Node/TypeScript, in `edufika-session-api/`)
+Ruang Lingkup Proyek
+--------------------
+- Aplikasi Android (Kotlin + Java)
+- Lapisan UI React Native (di `react-native/`)
+- Session backend API (Node/TypeScript, di `edufika-session-api/`)
 - MariaDB + phpMyAdmin (Docker)
 
-Workspace Root
+Root Workspace
 --------------
 `C:\Users\<PC_NAME>\AndroidStudioProjects\Edufika2`
 
 
-1) Current Runtime Topology
----------------------------
-- Android app: installed via Gradle (`:app:installDebug`)
+1) Topologi Runtime Saat Ini
+----------------------------
+- Aplikasi Android: diinstal melalui Gradle (`:app:installDebug`)
 - Metro: `localhost:8081`
 - Backend API: `0.0.0.0:8091`
-- MariaDB host port: `3307` (container `3306`)
+- Port host MariaDB: `3307` (container `3306`)
 - phpMyAdmin: `http://localhost:8089`
 
-Key files:
+File kunci:
 - `docker-compose.yml`
 - `edufika-session-api/.env`
 - `backenddebug.txt`
 - `setup/*.bat`
 
 
-2) Prerequisites (Windows)
---------------------------
+2) Prasyarat (Windows)
+----------------------
 - Android Studio + SDK + Platform Tools
 - Node.js + npm
 - Docker Desktop
-- Java 11+ for Android Gradle Plugin
-- USB driver for your phone (if using USB)
+- Java 11+ untuk Android Gradle Plugin
+- Driver USB untuk ponsel (jika menggunakan USB)
 
-Optional but recommended:
+Opsional tetapi direkomendasikan:
 - PowerShell 7+
 - Git
 
 
-3) First-Time Setup (Clean Machine)
------------------------------------
-1. Open terminal in repo root.
-2. Install workspace dependencies:
+3) Setup Pertama Kali (Mesin Bersih)
+------------------------------------
+1. Buka terminal di root repo.
+2. Instal dependensi workspace:
    - `npm install`
    - `npm --prefix react-native install`
    - `npm --prefix edufika-session-api install`
-3. Start DB containers:
+3. Nyalakan container DB:
    - `docker compose up -d`
-4. Run backend migrations:
+4. Jalankan migrasi backend:
    - `npm --prefix edufika-session-api run migrate`
-5. Start backend:
+5. Nyalakan backend:
    - `npm --prefix edufika-session-api run dev`
-6. Start Metro:
+6. Nyalakan Metro:
    - `npm --prefix react-native run start`
-7. Install debug app:
+7. Instal aplikasi debug:
    - `.\gradlew.bat :app:installDebug`
 
 
-4) Day-to-Day Startup (Fast)
-----------------------------
-Minimal sequence:
+4) Startup Harian (Cepat)
+-------------------------
+Urutan minimal:
 1. `docker compose up -d`
 2. `npm --prefix edufika-session-api run migrate`
 3. `npm --prefix edufika-session-api run dev`
 4. `npm --prefix react-native run start`
 5. `.\gradlew.bat :app:installDebug`
 
-If using the quick launchers in `setup/`:
+Jika menggunakan launcher cepat di `setup/`:
 - `quick-debug-tabs.bat`
 - `quick-install-debug.bat`
 - `quick-metro.bat`
@@ -81,9 +81,9 @@ If using the quick launchers in `setup/`:
 - `quick-usb-debug.bat`
 
 
-5) Backend Configuration Reference
-----------------------------------
-Active backend env (`edufika-session-api/.env`):
+5) Referensi Konfigurasi Backend
+--------------------------------
+Env backend aktif (`edufika-session-api/.env`):
 - `HOST=0.0.0.0`
 - `PORT=8091`
 - `DB_DIALECT=mysql`
@@ -91,72 +91,72 @@ Active backend env (`edufika-session-api/.env`):
 - `ACCESS_SIGNATURE_TTL_SECONDS=300`
 - `HEARTBEAT_TIMEOUT_SECONDS=30`
 - `RISK_LOCK_THRESHOLD=12`
-- `REQUIRE_HTTPS=false` (development only)
+- `REQUIRE_HTTPS=false` (khusus development)
 - `DEFAULT_WHITELIST=...`
 
-Do not keep dev secrets in production.
+Jangan simpan secret development di production.
 
 
-6) Health and Connectivity Checks
----------------------------------
-PC local check:
+6) Pemeriksaan Health dan Konektivitas
+--------------------------------------
+Pemeriksaan lokal di PC:
 - `curl.exe -i http://127.0.0.1:8091/health`
 
-LAN check (replace with your PC LAN IP):
+Pemeriksaan LAN (ganti dengan IP LAN PC Anda):
 - `curl.exe -i http://<PC_LAN_IP>:8091/health`
 
-Phone browser check:
-- Open `http://<PC_LAN_IP>:8091/health`
+Pemeriksaan dari browser ponsel:
+- Buka `http://<PC_LAN_IP>:8091/health`
 
-If phone cannot connect:
-- Ensure backend binds `0.0.0.0`
-- Ensure same WiFi subnet
-- Disable mobile data on phone during test
-- Add firewall rule for 8091
-
-
-7) App <-> Backend Linking (Developer Access)
-----------------------------------------------
-In app:
-1. Open Developer Access Panel.
-2. Set backend URL to exactly `http://<PC_LAN_IP>:8091`
-3. Save.
-4. Run backend connection test.
-
-Important:
-- Include `http://`
-- Use exact port `8091`
+Jika ponsel tidak bisa terhubung:
+- Pastikan backend bind ke `0.0.0.0`
+- Pastikan PC dan ponsel berada di subnet WiFi yang sama
+- Nonaktifkan mobile data ponsel saat pengujian
+- Tambahkan rule firewall untuk `8091`
 
 
-8) USB Debugging Notes
-----------------------
-If `adb` is not recognized, use absolute path, e.g.:
+7) Penghubung Aplikasi <-> Backend (Developer Access)
+------------------------------------------------------
+Di aplikasi:
+1. Buka Developer Access Panel.
+2. Atur backend URL tepat ke `http://<PC_LAN_IP>:8091`
+3. Simpan.
+4. Jalankan tes koneksi backend.
+
+Penting:
+- Sertakan `http://`
+- Gunakan port `8091` yang tepat
+
+
+8) Catatan USB Debugging
+------------------------
+Jika `adb` tidak dikenali, gunakan path absolut, misalnya:
 `"C:\Users\MyBook Hype AMD\AppData\Local\Android\Sdk\platform-tools\adb.exe" devices`
 
-Useful commands:
+Perintah yang berguna:
 - USB reverse Metro:
   - `adb reverse tcp:8081 tcp:8081`
 - USB reverse backend:
   - `adb reverse tcp:8091 tcp:8091`
 
 
-9) WiFi Debugging Notes
------------------------
-Workflow:
+9) Catatan WiFi Debugging
+-------------------------
+Alur:
 1. Pair: `adb pair <PHONE_IP:PAIR_PORT>`
 2. Connect: `adb connect <PHONE_IP:CONNECT_PORT>`
 
-Pair port is not always connect port.
-Always use the current "Wireless debugging" connect endpoint shown on device.
+Port pairing tidak selalu sama dengan port connect.
+Selalu gunakan endpoint connect `Wireless debugging` yang sedang ditampilkan di perangkat.
 
 
-10) API Smoke Test
-------------------
-Use:
+10) Uji Asap API
+----------------
+Gunakan:
 - `npm --prefix edufika-session-api run smoke:phone`
-Or follow the manual sequence in `backenddebug.txt`.
+Atau ikuti urutan manual di `backenddebug.txt`.
 
-Validate these endpoints:
+Validasi endpoint berikut:
 - `POST /session/create`
 - `POST /session/claim`
 - `POST /session/whitelist/add`
@@ -167,16 +167,16 @@ Validate these endpoints:
 - `POST /session/finish`
 
 
-11) Database Maintenance (MariaDB/phpMyAdmin)
+11) Maintenance Database (MariaDB/phpMyAdmin)
 ----------------------------------------------
-Open:
+Buka:
 - `http://localhost:8089`
 
-Default local credentials from compose:
+Kredensial lokal bawaan dari compose:
 - user: `root`
 - pass: `rootpass`
 
-Core tables to inspect:
+Tabel inti yang perlu diperiksa:
 - `exam_sessions`
 - `session_tokens`
 - `device_bindings`
@@ -186,19 +186,19 @@ Core tables to inspect:
 - `session_student_pin_templates`
 - `session_proctor_pins`
 
-Always run `USE edufika;` before queries.
+Selalu jalankan `USE edufika;` sebelum query.
 
 
-12) React Native UI Notes
--------------------------
-- Active RN runtime is `react-native/`.
-- `new_design/` is a web (Vite/DOM) design source and not directly runnable in RN.
-- Current UI has been rewired to match that visual direction in RN components.
-- Old RN UI snapshot archive: `old-design.zip`.
+12) Catatan UI React Native
+---------------------------
+- Runtime RN aktif berada di `react-native/`.
+- `new_design/` adalah sumber desain web (Vite/DOM) dan tidak dapat dijalankan langsung di RN.
+- UI saat ini telah di-rewire agar mengikuti arah visual tersebut di komponen RN.
+- Arsip snapshot UI RN lama: `old-design.zip`.
 
 
-13) Build and Validation Commands
----------------------------------
+13) Perintah Build dan Validasi
+-------------------------------
 Android/Kotlin:
 - `.\gradlew.bat :app:compileDebugKotlin`
 - `.\gradlew.bat :app:createBundleDebugJsAndAssets`
@@ -215,97 +215,96 @@ Backend:
 - `npm --prefix edufika-session-api run migrate`
 
 
-14) ESLint Status
+14) Status ESLint
 -----------------
-RN lint requires an ESLint config file in `react-native/`:
-- `eslint.config.js` (ESLint v9+ format), or
-- compatible legacy setup if tooling supports it.
+Lint RN membutuhkan file konfigurasi ESLint di `react-native/`:
+- `eslint.config.js` (format ESLint v9+), atau
+- setup legacy yang kompatibel jika tooling mendukungnya.
 
-If lint fails with "couldn't find eslint.config", add config first.
+Jika lint gagal dengan pesan `couldn't find eslint.config`, tambahkan config terlebih dahulu.
 
 
-15) Common Failures and Fixes
------------------------------
-A) `EADDRINUSE` on 8091
-- Port occupied. Find PID and kill:
+15) Kegagalan Umum dan Perbaikannya
+-----------------------------------
+A) `EADDRINUSE` pada 8091
+- Port sedang dipakai. Cari PID lalu hentikan:
   - `netstat -ano | findstr :8091`
   - `taskkill /PID <PID> /F`
 
-B) `EADDRINUSE` on 8081
-- Another Metro already running. Stop old process or use another port.
+B) `EADDRINUSE` pada 8081
+- Metro lain sedang berjalan. Hentikan proses lama atau gunakan port lain.
 
-C) `docker` not recognized
-- Install Docker Desktop and restart terminal.
+C) `docker` tidak dikenali
+- Instal Docker Desktop lalu restart terminal.
 
-D) `adb` not recognized
-- Add platform-tools to PATH or use full adb path.
+D) `adb` tidak dikenali
+- Tambahkan `platform-tools` ke PATH atau gunakan path `adb` lengkap.
 
-E) App says "Backend tidak terjangkau"
-- Wrong URL scheme/host/port in app
-- Phone not on same network
-- Firewall blocking 8091
+E) Aplikasi menampilkan `Backend tidak terjangkau`
+- Skema/host/port URL di aplikasi salah
+- Ponsel tidak berada di jaringan yang sama
+- Firewall memblokir `8091`
 
-F) Immediate session lock by heartbeat
-- Check risk configuration and telemetry events.
-- Confirm only security events are sent as violations.
+F) Sesi langsung terkunci oleh heartbeat
+- Periksa konfigurasi risk dan event telemetry.
+- Pastikan hanya event keamanan yang dikirim sebagai violation.
 
-G) Whitelist rejected unexpectedly
-- Verify session/claim signature is current.
-- Verify URL in DB (`/viewform` vs `/edit` for Google Forms).
+G) Whitelist ditolak secara tidak terduga
+- Verifikasi signature session/claim masih current.
+- Verifikasi URL di DB (`/viewform` vs `/edit` untuk Google Forms).
 
 
-16) Operational Maintenance Checklist
+16) Checklist Maintenance Operasional
 -------------------------------------
-Daily:
-1. Confirm `docker ps` healthy.
-2. Confirm `/health` reachable from PC and phone.
-3. Run one token create/claim smoke flow.
-4. Confirm whitelist and heartbeat writes reach DB.
+Harian:
+1. Pastikan `docker ps` sehat.
+2. Pastikan `/health` dapat diakses dari PC dan ponsel.
+3. Jalankan satu alur smoke test create/claim token.
+4. Pastikan penulisan whitelist dan heartbeat masuk ke DB.
 
-Weekly:
-1. Backup MariaDB volume or SQL dump.
-2. Review violation logs and heartbeat anomalies.
-3. Update dependencies in a branch and re-run full validation.
+Mingguan:
+1. Backup volume MariaDB atau SQL dump.
+2. Tinjau log violation dan anomali heartbeat.
+3. Perbarui dependensi di branch terpisah lalu jalankan ulang validasi penuh.
 
-Before classroom exam:
-1. Start backend + DB + Metro 30 minutes early.
-2. Test with one admin token and one student token.
-3. Verify proctor PIN flow and session finish flow.
-4. Keep fallback USB cable and hotspot available.
+Sebelum ujian kelas:
+1. Nyalakan backend + DB + Metro 30 menit lebih awal.
+2. Uji dengan satu admin token dan satu student token.
+3. Verifikasi alur Proctor PIN dan alur finish session.
+4. Siapkan kabel USB cadangan dan hotspot sebagai fallback.
 
 
-17) Backup and Restore
+17) Backup dan Restore
 ----------------------
-Quick backup (example using container):
+Backup cepat (contoh menggunakan container):
 - `docker exec edufika-mariadb mysqldump -uroot -prootpass edufika > edufika_backup.sql`
 
 Restore:
 - `docker exec -i edufika-mariadb mysql -uroot -prootpass edufika < edufika_backup.sql`
 
 
-18) Production Hardening TODO (When Releasing)
-----------------------------------------------
-- Move to HTTPS domain and set `REQUIRE_HTTPS=true`
-- Replace `JWT_SECRET` with strong secret management
-- Disable debug bypass paths
-- Add proper release signing for Android
-- Add monitoring and alerting for backend uptime
-- Use restricted DB credentials (not root for app operations)
+18) TODO Penguatan Production (Saat Rilis)
+------------------------------------------
+- Pindah ke domain HTTPS dan set `REQUIRE_HTTPS=true`
+- Ganti `JWT_SECRET` dengan manajemen secret yang kuat
+- Nonaktifkan jalur bypass debug
+- Tambahkan release signing yang benar untuk Android
+- Tambahkan monitoring dan alerting untuk uptime backend
+- Gunakan kredensial DB terbatas (bukan root untuk operasi aplikasi)
 
 
-19) Canonical Reference Files
------------------------------
-- `prompts.txt` (product architecture and feature requirements)
-- `BUGNOTES.md` (active and resolved bug history)
-- `backenddebug.txt` (step-by-step backend debug commands)
-- `setup/` (quick command launchers)
-
-
-20) Change Management Rule
+19) File Referensi Kanonis
 --------------------------
-After major changes:
-1. Update `BUGNOTES.md` status.
-2. Update this `maintenance.txt` if commands, ports, or flow changed.
-3. Re-run compile/bundle checks.
-4. Re-test one complete session lifecycle end-to-end.
+- `prompts.txt` (arsitektur produk dan kebutuhan fitur)
+- `BUGNOTES.md` (riwayat bug aktif dan yang sudah selesai)
+- `backenddebug.txt` (perintah debug backend langkah demi langkah)
+- `setup/` (launcher perintah cepat)
 
+
+20) Aturan Manajemen Perubahan
+------------------------------
+Setelah perubahan besar:
+1. Perbarui status `BUGNOTES.md`.
+2. Perbarui `maintenance.txt` ini jika command, port, atau flow berubah.
+3. Jalankan ulang pemeriksaan compile/bundle.
+4. Uji ulang satu lifecycle sesi lengkap secara end-to-end.

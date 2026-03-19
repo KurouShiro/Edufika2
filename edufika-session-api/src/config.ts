@@ -39,6 +39,10 @@ export const config = {
     process.env.GDRIVE_FOLDER_ID?.trim() ||
     process.env.GOOGLE_DRIVE_FOLDER_ID?.trim() ||
     "1YBs9n7cAskGOWdjw2IGwV6zBHyYB44hT",
+  googleDriveFolderName:
+    process.env.GDRIVE_FOLDER_NAME?.trim() ||
+    process.env.GOOGLE_DRIVE_FOLDER_NAME?.trim() ||
+    "QuizData",
   googleDriveScope:
     process.env.GDRIVE_SCOPE?.trim() ||
     process.env.GOOGLE_DRIVE_SCOPE?.trim() ||

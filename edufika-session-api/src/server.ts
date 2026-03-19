@@ -28,6 +28,16 @@ apiRouter.get("/health", (_req, res) => {
   res.json({ ok: true, service: "edufika-session-api", now: new Date().toISOString() });
 });
 
+apiRouter.get("/health/drive", async (_req, res) => {
+  const googleDrive = await sessionService.getGoogleDriveHealth();
+  res.json({
+    ok: true,
+    service: "edufika-session-api",
+    now: new Date().toISOString(),
+    ...googleDrive,
+  });
+});
+
 apiRouter.use("/session", createSessionRouter(sessionService));
 apiRouter.use("/student", createStudentRouter(sessionService));
 apiRouter.use("/admin", createAdminRouter(sessionService));

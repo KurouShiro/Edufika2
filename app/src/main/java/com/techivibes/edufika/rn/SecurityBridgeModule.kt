@@ -5,11 +5,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.ActivityEventListener
 import com.facebook.react.bridge.Arguments
@@ -190,6 +193,15 @@ class SecurityBridgeModule(
     }
 
     @ReactMethod
+    fun getScreenshotAccessibilityEnabled(promise: Promise) {
+        runCatching {
+            promise.resolve(isScreenshotAccessibilityEnabled())
+        }.onFailure { error ->
+            promise.reject("screenshot_accessibility_read_failed", error)
+        }
+    }
+
+    @ReactMethod
     fun getDeviceFingerprint(promise: Promise) {
         runCatching {
             val androidId = Settings.Secure.getString(
@@ -220,6 +232,74 @@ class SecurityBridgeModule(
             } else {
                 ScreenLock.clear(activity)
             }
+        }
+    }
+
+    @ReactMethod
+    fun setScreenshotAccessibilityEnabled(enabled: Boolean) {
+        prefs.edit()
+            .putBoolean(TestConstants.PREF_SCREENSHOT_ACCESS_ENABLED, enabled)
+            .apply()
+
+        val activity = currentActivity ?: return
+        UiThreadUtil.runOnUiThread {
+            applyScreenshotAccessibility(activity, enabled)
+        }
+    }
+
+    @ReactMethod
+    fun setStartupPermissionGateActive(enabled: Boolean) {
+        prefs.edit()
+            .putBoolean(TestConstants.PREF_STARTUP_PERMISSION_GATE_ACTIVE, enabled)
+            .apply()
+    }
+
+    @ReactMethod
+    fun hasManageExternalStorageAccess(promise: Promise) {
+        runCatching {
+            val granted =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    Environment.isExternalStorageManager()
+                } else {
+                    true
+                }
+            promise.resolve(granted)
+        }.onFailure { error ->
+            promise.reject("manage_external_storage_read_failed", error)
+        }
+    }
+
+    @ReactMethod
+    fun openManageExternalStorageSettings(promise: Promise) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            promise.resolve(false)
+            return
+        }
+        UiThreadUtil.runOnUiThread {
+            val launchContext = currentActivity ?: appContext
+            val packageUri = Uri.parse("package:${appContext.packageName}")
+            val intents = listOf(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = packageUri
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = packageUri
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+
+            val opened = intents.any { intent ->
+                val canResolve = intent.resolveActivity(appContext.packageManager) != null
+                canResolve && runCatching {
+                    launchContext.startActivity(intent)
+                    true
+                }.getOrDefault(false)
+            }
+            promise.resolve(opened)
         }
     }
 
@@ -573,6 +653,21 @@ class SecurityBridgeModule(
 
     private fun isSplitScreenDetectionEnabled(): Boolean {
         return prefs.getBoolean(TestConstants.PREF_SPLIT_SCREEN_DETECTION_ENABLED, true)
+    }
+
+    private fun isScreenshotAccessibilityEnabled(): Boolean {
+        return prefs.getBoolean(TestConstants.PREF_SCREENSHOT_ACCESS_ENABLED, false)
+    }
+
+    private fun applyScreenshotAccessibility(activity: Activity, enabled: Boolean) {
+        if (enabled) {
+            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            activity.window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE
+            )
+        }
     }
 
     private fun emitEvent(eventName: String, payload: WritableMap) {

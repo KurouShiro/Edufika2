@@ -1,7 +1,7 @@
-< Project Edufika Development Log #1>
-Date : 16-3-2026 
-Report Writer : George Shawn Mathew Mandagi
+﻿< Log Pengembangan Proyek Edufika #1>
+Tanggal : 16-3-2026
+Penulis Laporan : George Shawn Mathew Mandagi
 -------------#
-Dev notes : 
-"The application's development is going as intended however there are a few small bugs and mishaps that needs to be cleaned up.
-implementation of basic auth login using SQL as a database has been implemented successfully. Current tests results center around live in-app exam tests.
+Catatan pengembangan :
+"Pengembangan aplikasi berjalan sesuai rencana, namun masih ada beberapa bug kecil dan kendala yang perlu dirapikan.
+Implementasi login basic auth menggunakan SQL sebagai basis data telah berhasil diterapkan. Hasil pengujian saat ini berfokus pada pengujian live untuk ujian in-app."

@@ -17,6 +17,13 @@ type InAppQuizSelectionProps = {
   language: AppLanguage;
   sessions: InAppQuizSession[];
   statusMessage: string;
+  driveHealthLoading: boolean;
+  driveHealthChecked: boolean;
+  driveHealthConnected: boolean;
+  driveHealthConfigured: boolean;
+  driveHealthFolderName: string;
+  driveHealthError: string;
+  onRefreshDriveHealth: () => void;
   onSelectSession: (session: InAppQuizSession) => void;
   onRefresh: () => void;
   onLogout: () => void;
@@ -27,6 +34,13 @@ export default function InAppQuizSelection({
   language,
   sessions,
   statusMessage,
+  driveHealthLoading,
+  driveHealthChecked,
+  driveHealthConnected,
+  driveHealthConfigured,
+  driveHealthFolderName,
+  driveHealthError,
+  onRefreshDriveHealth,
   onSelectSession,
   onRefresh,
   onLogout,
@@ -87,6 +101,47 @@ export default function InAppQuizSelection({
 
         <View style={styles.statusCard}>
           <Text style={styles.statusText}>{statusMessage}</Text>
+        </View>
+
+        <View style={styles.statusCard}>
+          <Text style={styles.healthTitle}>{tr(language, "Google Drive Health", "Google Drive Health")}</Text>
+          <Text style={styles.statusText}>
+            {driveHealthLoading
+              ? tr(
+                  language,
+                  "Mengecek koneksi Google Drive...",
+                  "Checking Google Drive connection..."
+                )
+              : driveHealthConnected
+                ? tr(
+                    language,
+                    `Google Drive terhubung. Folder aktif: ${driveHealthFolderName || "QuizData"}.`,
+                    `Google Drive connected. Active folder: ${driveHealthFolderName || "QuizData"}.`
+                  )
+                : !driveHealthChecked
+                  ? tr(
+                      language,
+                      "Status Google Drive belum diperiksa.",
+                      "Google Drive status has not been checked yet."
+                    )
+                  : !driveHealthConfigured
+                    ? tr(
+                        language,
+                        "Google Drive belum dikonfigurasi di backend.",
+                        "Google Drive is not configured on the backend."
+                      )
+                    : tr(
+                        language,
+                        `Google Drive bermasalah: ${driveHealthError || "unknown error"}`,
+                        `Google Drive issue: ${driveHealthError || "unknown error"}`
+                      )}
+          </Text>
+          <TerminalButton
+            label={tr(language, "Refresh Drive Health", "Refresh Drive Health")}
+            variant="outline"
+            onPress={onRefreshDriveHealth}
+            disabled={driveHealthLoading}
+          />
         </View>
       </ScrollView>
     </Layout>
@@ -173,6 +228,12 @@ const styles = StyleSheet.create({
     color: "#6b7280",
     fontFamily: "Montserrat-Regular",
     fontSize: 10,
+  },
+  healthTitle: {
+    color: "#1f2937",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 11,
+    marginBottom: 6,
   },
   footerActions: {
     gap: 0,

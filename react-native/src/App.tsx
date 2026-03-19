@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useRef, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, BackHandler, DeviceEventEmitter, NativeModules, Platform } from "react-native";
 import { AppLanguage, tr } from "./i18n";
 import AdminDashboardPanel from "./screens/AdminDashboardPanel";
@@ -14,6 +14,7 @@ import InAppQuizSelection, { type InAppQuizSession } from "./screens/InAppQuizSe
 import LoginSelection from "./screens/LoginSelection";
 import ManualInputFail from "./screens/ManualInputFail";
 import ManualInputScreen from "./screens/ManualInputScreen";
+import PermissionsScreen from "./screens/Permissions";
 import QuizStudentScreen from "./screens/QuizStudentScreen";
 import QuizQuestionBuilderScreen, {
   type QuizQuestionBuilderCache,
@@ -28,6 +29,7 @@ import URLWhitelist from "./screens/URLWhitelist";
 import UserLogin from "./screens/UserLogin";
 import ViolationScreen from "./screens/ViolationScreen";
 import { ThemeId, getActiveThemeId, setActiveTheme } from "./screens/Layout";
+import { fetchGoogleDriveHealth, type DriveHealthResult } from "./utils/quizResultExport";
 
 const ExamBrowserScreen = lazy(() => import("./screens/ExamBrowserScreen"));
 const QRScannerScreen = lazy(() => import("./screens/QRScannerScreen"));
@@ -49,6 +51,7 @@ type ScreenId =
   | "ExamSelectionScreen"
   | "ManualInputScreen"
   | "ManualInputFail"
+  | "PermissionsScreen"
   | "HistoryScreen"
   | "QuizQuestionBuilderScreen"
   | "QuizTeacherScreen"
@@ -125,6 +128,27 @@ type QuizResultByToken = {
   studentName: string;
   studentClass: string;
   studentElective: string;
+};
+
+type ViolationAuditRecord = {
+  timestamp: string;
+  type: string;
+  detail: string;
+  riskDelta: number;
+  source: "risk" | "native_lock";
+};
+
+type DriveHealthState = {
+  loading: boolean;
+  checked: boolean;
+  connected: boolean;
+  configured: boolean;
+  folderName: string;
+  folderId: string;
+  authMode: string;
+  scope: string;
+  error: string;
+  lastCheckedAt: number | null;
 };
 
 type StudentTokenAdminContext = {
@@ -237,11 +261,14 @@ type EdufikaSecurityModuleShape = {
   getKioskEnabled?: () => Promise<boolean>;
   getViolationSystemEnabled?: () => Promise<boolean>;
   getSplitScreenDetectionEnabled?: () => Promise<boolean>;
+  getScreenshotAccessibilityEnabled?: () => Promise<boolean>;
   getAdminWorkspaceCache?: () => Promise<string>;
   getDeviceFingerprint?: () => Promise<string>;
+  setStartupPermissionGateActive?: (enabled: boolean) => void;
   setKioskEnabled?: (enabled: boolean) => void;
   setViolationSystemEnabled?: (enabled: boolean) => void;
   setSplitScreenDetectionEnabled?: (enabled: boolean) => void;
+  setScreenshotAccessibilityEnabled?: (enabled: boolean) => void;
   setAdminWorkspaceCache?: (value: string) => void;
   clearAdminWorkspaceCache?: () => void;
   setPinEntryFocusBypass?: (enabled: boolean) => void;
@@ -779,6 +806,37 @@ function makeLogLine(message: string): string {
   return `[${stamp}] ${message}`;
 }
 
+function classifyViolationType(detail: string): string {
+  const normalized = detail.trim().toLowerCase();
+  if (normalized.includes("multi-window") || normalized.includes("split-screen")) {
+    return "MULTI_WINDOW";
+  }
+  if (
+    normalized.includes("focus") ||
+    normalized.includes("screen off") ||
+    normalized.includes("layar mati")
+  ) {
+    return "FOCUS_LOST";
+  }
+  if (normalized.includes("background")) {
+    return "APP_BACKGROUND";
+  }
+  if (
+    normalized.includes("whitelist") ||
+    normalized.includes("external navigation") ||
+    normalized.includes("url")
+  ) {
+    return "NAVIGATION_VIOLATION";
+  }
+  if (normalized.includes("risk score")) {
+    return "RISK_THRESHOLD";
+  }
+  if (normalized.includes("lock")) {
+    return "SESSION_LOCK";
+  }
+  return "OTHER";
+}
+
 function generateToken(): string {
   const randomPart = Math.random().toString(36).slice(2, 8).toUpperCase();
   return `S-${randomPart}`;
@@ -900,6 +958,18 @@ export default function App() {
   const [inAppQuizStatus, setInAppQuizStatus] = useState(
     tr("id", "Sinkronisasi daftar kuis.", "Syncing quiz list.")
   );
+  const [driveHealth, setDriveHealth] = useState<DriveHealthState>({
+    loading: false,
+    checked: false,
+    connected: false,
+    configured: false,
+    folderName: "",
+    folderId: "",
+    authMode: "",
+    scope: "",
+    error: "",
+    lastCheckedAt: null,
+  });
   const [quizEntryScreen, setQuizEntryScreen] = useState<ScreenId>("ExamSelectionScreen");
   const [generatedToken, setGeneratedToken] = useState("");
   const [generatedTokenExpiryAt, setGeneratedTokenExpiryAt] = useState("");
@@ -951,6 +1021,7 @@ export default function App() {
       "Suspicious behavior detected. Activity has been logged for proctor review."
     )
   );
+  const [violationHistory, setViolationHistory] = useState<ViolationAuditRecord[]>([]);
 
   const [logs, setLogs] = useState<string[]>([
     makeLogLine("System initialized."),
@@ -988,6 +1059,7 @@ export default function App() {
   const [kioskEnabled, setKioskEnabled] = useState(true);
   const [violationSystemEnabled, setViolationSystemEnabled] = useState(true);
   const [splitScreenDetectionEnabled, setSplitScreenDetectionEnabled] = useState(true);
+  const [screenshotAccessibilityEnabled, setScreenshotAccessibilityEnabled] = useState(false);
   const [browserUrl, setBrowserUrl] = useState("https://example.org");
   const [developerClaimTokenInput, setDeveloperClaimTokenInput] = useState("");
   const [backendBaseUrl, setBackendBaseUrl] = useState(DEFAULT_BACKEND_BASE_URL);
@@ -1016,6 +1088,8 @@ export default function App() {
   const legacyAdminWorkspaceRef = useRef<AdminWorkspaceEntry | null>(null);
   const pendingAdminTokenRef = useRef<string | null>(null);
   const pendingAdminTokenOptionsRef = useRef<{ preserveBackendSession: boolean } | null>(null);
+  const startupPermissionGateActive = screen === "SplashScreen" || screen === "PermissionsScreen";
+  const runtimeKioskEnabled = kioskEnabled && !startupPermissionGateActive;
 
   const applyAdminWorkspaceEntry = (
     entry: AdminWorkspaceEntry,
@@ -1157,7 +1231,7 @@ export default function App() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setBootMessage(tr(language, "Semua layanan inti aktif.", "All core services online."));
-      setScreen("LoginSelection");
+      setScreen("PermissionsScreen");
     }, 1200);
     return () => clearTimeout(timer);
   }, []);
@@ -1166,10 +1240,16 @@ export default function App() {
     let mounted = true;
     const hydrateKiosk = async () => {
       try {
-        const [nativeKiosk, nativeViolationSystem, nativeSplitScreen] = await Promise.all([
+        const [
+          nativeKiosk,
+          nativeViolationSystem,
+          nativeSplitScreen,
+          nativeScreenshotAccessibility,
+        ] = await Promise.all([
           securityModule?.getKioskEnabled?.(),
           securityModule?.getViolationSystemEnabled?.(),
           securityModule?.getSplitScreenDetectionEnabled?.(),
+          securityModule?.getScreenshotAccessibilityEnabled?.(),
         ]);
         if (!mounted) {
           return;
@@ -1182,6 +1262,9 @@ export default function App() {
         }
         if (typeof nativeSplitScreen === "boolean") {
           setSplitScreenDetectionEnabled(nativeSplitScreen);
+        }
+        if (typeof nativeScreenshotAccessibility === "boolean") {
+          setScreenshotAccessibilityEnabled(nativeScreenshotAccessibility);
         }
       } catch {
         // Keep default values when native bridge is unavailable.
@@ -1313,13 +1396,28 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    runSecurityCall(() =>
+      securityModule?.setStartupPermissionGateActive?.(startupPermissionGateActive)
+    );
+  }, [startupPermissionGateActive]);
+
+  useEffect(() => {
     if (!kioskReady) {
       return;
     }
-    runSecurityCall(() => securityModule?.setKioskEnabled?.(kioskEnabled));
+    runSecurityCall(() => securityModule?.setKioskEnabled?.(runtimeKioskEnabled));
     runSecurityCall(() => securityModule?.setViolationSystemEnabled?.(violationSystemEnabled));
     runSecurityCall(() => securityModule?.setSplitScreenDetectionEnabled?.(splitScreenDetectionEnabled));
-  }, [kioskEnabled, kioskReady, splitScreenDetectionEnabled, violationSystemEnabled]);
+    runSecurityCall(() =>
+      securityModule?.setScreenshotAccessibilityEnabled?.(screenshotAccessibilityEnabled)
+    );
+  }, [
+    kioskReady,
+    runtimeKioskEnabled,
+    screenshotAccessibilityEnabled,
+    splitScreenDetectionEnabled,
+    violationSystemEnabled,
+  ]);
 
   useEffect(() => {
     setActiveTheme(themeId);
@@ -1520,9 +1618,42 @@ export default function App() {
     backendBaseUrl,
   ]);
 
-  const addLog = (message: string) => {
+  const addLog = useCallback((message: string) => {
     setLogs((prev) => [makeLogLine(message), ...prev].slice(0, 120));
-  };
+  }, []);
+
+  const recordViolation = useCallback(
+    (detail: string, riskDelta: number, source: "risk" | "native_lock") => {
+      const trimmedDetail = detail.trim();
+      if (!trimmedDetail) {
+        return;
+      }
+      setViolationHistory((prev) => [
+        {
+          timestamp: new Date().toISOString(),
+          type: classifyViolationType(trimmedDetail),
+          detail: trimmedDetail,
+          riskDelta,
+          source,
+        },
+        ...prev,
+      ].slice(0, 40));
+    },
+    []
+  );
+
+  const resetViolationAudit = useCallback(() => {
+    setRiskScore(0);
+    setShowIntegrityWarning(false);
+    setIntegrityMessage(
+      tr(
+        language,
+        "Perilaku mencurigakan terdeteksi. Aktivitas tercatat untuk proktor.",
+        "Suspicious behavior detected. Activity has been logged for proctor review."
+      )
+    );
+    setViolationHistory([]);
+  }, [language]);
 
   useEffect(() => {
     const lockSubscription = DeviceEventEmitter.addListener(
@@ -1568,6 +1699,7 @@ export default function App() {
         setViolationReason(reason);
         setIntegrityMessage(reason);
         setShowIntegrityWarning(true);
+        recordViolation(reason, 10, "native_lock");
         setLogs((prev) => [makeLogLine(`Native lock event: ${reason}`), ...prev].slice(0, 120));
         setScreen("ViolationScreen");
       }
@@ -1591,7 +1723,16 @@ export default function App() {
       lockSubscription.remove();
       heartbeatSubscription.remove();
     };
-  }, [activeStudentToken, backendBaseUrl, language, role, sessionId, studentBackendAccessSignature, violationSystemEnabled]);
+  }, [
+    activeStudentToken,
+    backendBaseUrl,
+    language,
+    recordViolation,
+    role,
+    sessionId,
+    studentBackendAccessSignature,
+    violationSystemEnabled,
+  ]);
 
   useEffect(() => {
     const shouldWatchMultiWindow =
@@ -1700,6 +1841,80 @@ export default function App() {
     }
     return payload;
   };
+
+  const refreshDriveHealth = useCallback(
+    async (source: string = "app-flow") => {
+      const base = normalizeBackendBaseUrl(backendBaseUrl);
+      if (!base) {
+        setDriveHealth({
+          loading: false,
+          checked: true,
+          connected: false,
+          configured: false,
+          folderName: "",
+          folderId: "",
+          authMode: "",
+          scope: "",
+          error: tr(language, "URL backend kosong.", "Backend URL is empty."),
+          lastCheckedAt: Date.now(),
+        });
+        return;
+      }
+
+      setDriveHealth((prev) => ({
+        ...prev,
+        loading: true,
+      }));
+
+      try {
+        const payload: DriveHealthResult = await fetchGoogleDriveHealth(base);
+        setDriveHealth({
+          loading: false,
+          checked: true,
+          connected: payload.connected === true,
+          configured: payload.configured === true,
+          folderName: payload.folder_name ?? "",
+          folderId: payload.folder_id ?? "",
+          authMode: payload.auth_mode ?? "",
+          scope: payload.scope ?? "",
+          error: payload.error ?? "",
+          lastCheckedAt: Date.now(),
+        });
+        addLog(
+          `Google Drive health check (${source}): ${payload.connected ? "connected" : "failed"}${
+            payload.folder_name ? ` | folder=${payload.folder_name}` : ""
+          }${payload.error ? ` | error=${payload.error}` : ""}`
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setDriveHealth({
+          loading: false,
+          checked: true,
+          connected: false,
+          configured: false,
+          folderName: "",
+          folderId: "",
+          authMode: "",
+          scope: "",
+          error: message,
+          lastCheckedAt: Date.now(),
+        });
+        addLog(`Google Drive health check failed (${source}): ${message}`);
+      }
+    },
+    [addLog, backendBaseUrl, language]
+  );
+
+  useEffect(() => {
+    if (
+      screen !== "ExamSelectionScreen" &&
+      screen !== "InAppQuizSelection" &&
+      screen !== "QuizStudentScreen"
+    ) {
+      return;
+    }
+    void refreshDriveHealth(screen);
+  }, [refreshDriveHealth, screen]);
 
   const loadAdminMonitor = async (): Promise<boolean> => {
     const base = normalizeBackendBaseUrl(backendBaseUrl);
@@ -2294,6 +2509,7 @@ export default function App() {
       }
       setStudentAuthToken(token);
       setStudentAccount(account);
+      resetViolationAudit();
       setStudentAuthStatus(tr(language, "Login siswa berhasil.", "Student login successful."));
       addLog("Student authenticated via Basic Auth.");
       setScreen("InAppQuizSelection");
@@ -2389,7 +2605,7 @@ export default function App() {
         tokenExpiresAt ?? Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000
       );
       setSessionExpiryHandled(false);
-      setRiskScore(0);
+      resetViolationAudit();
       setQuizEntryScreen("InAppQuizSelection");
       setStatusMessage(tr(language, "Login siswa berhasil.", "Student login successful."));
       addLog(`Student joined in-app quiz session: ${sessionIdFromApi}`);
@@ -2499,6 +2715,7 @@ export default function App() {
       addLog(`Risk blocked (violation system disabled): ${message}`);
       return;
     }
+    recordViolation(message, score, "risk");
     setRiskScore((prev) => {
       const next = prev + score;
       addLog(`${message} | risk +${score} => ${next}`);
@@ -2564,16 +2781,8 @@ export default function App() {
     setSessionExpiresAt(null);
     setSessionTimeLeftLabel("--:--:--");
     setSessionExpiryHandled(false);
-    setRiskScore(0);
+    resetViolationAudit();
     setSessionId(generateSessionId());
-    setShowIntegrityWarning(false);
-    setIntegrityMessage(
-      tr(
-        language,
-        "Perilaku mencurigakan terdeteksi. Aktivitas tercatat untuk proktor.",
-        "Suspicious behavior detected. Activity has been logged for proctor review."
-      )
-    );
     setDeveloperUnlocked(false);
     setDeveloperOrigin("TokenLogin");
     setDeveloperClaimTokenInput("");
@@ -2676,7 +2885,7 @@ export default function App() {
       setSessionId(generateSessionId());
       setSessionExpiresAt(Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000);
       setSessionExpiryHandled(false);
-      setRiskScore(0);
+      resetViolationAudit();
       setStatusMessage(tr(language, "Login siswa berhasil.", "Student login successful."));
       addLog("Student authenticated using StudentID.");
       setScreen("ExamSelectionScreen");
@@ -2695,7 +2904,7 @@ export default function App() {
       setSessionId(generateSessionId());
       setSessionExpiresAt(Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000);
       setSessionExpiryHandled(false);
-      setRiskScore(0);
+      resetViolationAudit();
       setStatusMessage(tr(language, "Login admin/proktor berhasil.", "Admin/proctor login successful."));
       addLog("Admin authenticated using AdminID.");
       activateAdminWorkspace(adminTokenKey);
@@ -2714,7 +2923,7 @@ export default function App() {
       setSessionId(generateSessionId());
       setSessionExpiresAt(Date.now() + DEFAULT_SESSION_EXPIRY_MINUTES * 60 * 1000);
       setSessionExpiryHandled(false);
-      setRiskScore(0);
+      resetViolationAudit();
       setDeveloperOrigin("TokenLogin");
       setDeveloperUnlocked(true);
       setStatusMessage(tr(language, "Akses developer diberikan.", "Developer access granted."));
@@ -2754,7 +2963,7 @@ export default function App() {
         setSessionId(claimed.sessionId);
         setSessionExpiresAt(expiresAt);
         setSessionExpiryHandled(false);
-        setRiskScore(0);
+        resetViolationAudit();
         if (claimed.whitelist.length > 0) {
           setWhitelist(Array.from(new Set(claimed.whitelist)));
         }
@@ -2855,7 +3064,7 @@ export default function App() {
       setSessionId(generateSessionId());
       setSessionExpiresAt(issued.expiresAt);
       setSessionExpiryHandled(false);
-      setRiskScore(0);
+      resetViolationAudit();
       updateIssuedToken(issued.token, {
         status: "online",
         ipAddress: resolvedRole === "admin" ? "192.168.1.11" : "192.168.1.23",
@@ -3321,6 +3530,13 @@ export default function App() {
         language={language}
         sessions={inAppQuizSessions}
         statusMessage={inAppQuizStatus}
+        driveHealthLoading={driveHealth.loading}
+        driveHealthChecked={driveHealth.checked}
+        driveHealthConnected={driveHealth.connected}
+        driveHealthConfigured={driveHealth.configured}
+        driveHealthFolderName={driveHealth.folderName}
+        driveHealthError={driveHealth.error}
+        onRefreshDriveHealth={() => void refreshDriveHealth("in-app-quiz-selection")}
         onSelectSession={(session) => void joinInAppQuizSession(session)}
         onRefresh={() => void loadInAppQuizSessions()}
         onLogout={() => {
@@ -3343,11 +3559,28 @@ export default function App() {
           setScreen("QuizStudentScreen");
         }}
         showQuizOption={activeExamMode === "HYBRID" || activeExamMode === "IN_APP_QUIZ"}
+        driveHealthLoading={driveHealth.loading}
+        driveHealthChecked={driveHealth.checked}
+        driveHealthConnected={driveHealth.connected}
+        driveHealthConfigured={driveHealth.configured}
+        driveHealthFolderName={driveHealth.folderName}
+        driveHealthError={driveHealth.error}
+        onRefreshDriveHealth={() => void refreshDriveHealth("exam-selection")}
         onLogout={() => {
           addLog("Student logged out.");
           logoutToLogin();
         }}
         onOpenSettings={() => openSettingsFrom("ExamSelectionScreen")}
+      />
+    );
+  }
+
+  if (screen === "PermissionsScreen") {
+    return (
+      <PermissionsScreen
+        language={language}
+        onLog={addLog}
+        onContinue={() => setScreen("LoginSelection")}
       />
     );
   }
@@ -3359,15 +3592,22 @@ export default function App() {
         backendBaseUrl={backendBaseUrl}
         sessionId={sessionId}
         accessSignature={studentBackendAccessSignature}
+        driveHealthLoading={driveHealth.loading}
+        driveHealthChecked={driveHealth.checked}
+        driveHealthConnected={driveHealth.connected}
+        driveHealthConfigured={driveHealth.configured}
+        driveHealthFolderName={driveHealth.folderName}
+        driveHealthError={driveHealth.error}
+        onRefreshDriveHealth={() => void refreshDriveHealth("quiz-student-screen")}
         onLog={addLog}
         onBack={() => setScreen(quizEntryScreen)}
-        kioskEnabled={kioskEnabled}
-        onSetKioskEnabled={setKioskEnabled}
+        riskScore={riskScore}
         showIntegrityWarning={showIntegrityWarning}
         integrityMessage={integrityMessage}
         onDismissIntegrityWarning={() => setShowIntegrityWarning(false)}
         studentAccount={studentAccount}
         studentToken={activeStudentToken}
+        violationHistory={violationHistory}
       />
     );
   }
@@ -4466,6 +4706,7 @@ export default function App() {
         kioskEnabled={kioskEnabled}
         violationSystemEnabled={violationSystemEnabled}
         splitScreenDetectionEnabled={splitScreenDetectionEnabled}
+        screenshotAccessibilityEnabled={screenshotAccessibilityEnabled}
         onUnlock={() => {
           if (developerPassword.trim() === DEVELOPER_PASSWORD) {
             setDeveloperUnlocked(true);
@@ -4500,6 +4741,13 @@ export default function App() {
           }
           setSplitScreenDetectionEnabled(value);
           addLog(`Split-screen detection changed to ${value ? "ON" : "OFF"}.`);
+        }}
+        onToggleScreenshotAccessibility={(value) => {
+          if (!developerUnlocked) {
+            return;
+          }
+          setScreenshotAccessibilityEnabled(value);
+          addLog(`Screenshot accessibility changed to ${value ? "ON" : "OFF"}.`);
         }}
         browserUrl={browserUrl}
         onBrowserUrlChange={setBrowserUrl}

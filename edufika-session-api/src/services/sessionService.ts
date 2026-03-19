@@ -736,7 +736,7 @@ export class SessionService {
     fileName: string;
     markdown: string;
     metadata: Record<string, unknown>;
-  }): Promise<{ file_id: string; web_view_link?: string }> {
+  }): Promise<{ file_id: string; web_view_link?: string; folder_name?: string; folder_id?: string }> {
     const client = await dbPool.connect();
     try {
       const auth = await this.authenticate(client, input.sessionId, input.accessSignature);
@@ -747,6 +747,61 @@ export class SessionService {
       return file;
     } finally {
       client.release();
+    }
+  }
+
+  async getGoogleDriveHealth(): Promise<{
+    configured: boolean;
+    connected: boolean;
+    auth_mode: "oauth" | "service_account" | "unconfigured";
+    scope: string;
+    folder_name: string;
+    folder_id: string;
+    configured_folder_id: string;
+    error?: string;
+  }> {
+    const credentialState = this.getGoogleDriveCredentialState();
+    const folderName = config.googleDriveFolderName.trim() || "QuizData";
+    const configuredFolderId = config.googleDriveFolderId.trim();
+
+    if (!credentialState.configured) {
+      return {
+        configured: false,
+        connected: false,
+        auth_mode: credentialState.authMode,
+        scope: config.googleDriveScope,
+        folder_name: folderName,
+        folder_id: "",
+        configured_folder_id: configuredFolderId,
+        error:
+          "Google Drive credentials are not configured (set GDRIVE_CLIENT_ID/SECRET/REFRESH_TOKEN or GOOGLE_DRIVE_CLIENT_EMAIL/PRIVATE_KEY)",
+      };
+    }
+
+    try {
+      const driveAuth = await this.getGoogleDriveAccessToken();
+      const folder = await this.resolveGoogleDriveTargetFolder(driveAuth.accessToken);
+      return {
+        configured: true,
+        connected: true,
+        auth_mode: driveAuth.authMode,
+        scope: config.googleDriveScope,
+        folder_name: folder.folderName,
+        folder_id: folder.folderId,
+        configured_folder_id: configuredFolderId,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        configured: true,
+        connected: false,
+        auth_mode: credentialState.authMode,
+        scope: config.googleDriveScope,
+        folder_name: folderName,
+        folder_id: configuredFolderId,
+        configured_folder_id: configuredFolderId,
+        error: message,
+      };
     }
   }
 
@@ -4347,72 +4402,64 @@ export class SessionService {
     fileName: string,
     markdown: string,
     metadata: Record<string, unknown>
-  ): Promise<{ file_id: string; web_view_link?: string }> {
-    const useOAuth =
-      Boolean(config.googleDriveClientId) &&
-      Boolean(config.googleDriveClientSecret) &&
-      Boolean(config.googleDriveRefreshToken);
-    const clientEmail = config.googleDriveClientEmail;
-    const privateKey = config.googleDrivePrivateKey;
-    const folderId = config.googleDriveFolderId;
-    if (!useOAuth && (!clientEmail || !privateKey)) {
-      throw new ApiError(
-        500,
-        "Google Drive credentials are not configured (set GDRIVE_CLIENT_ID/SECRET/REFRESH_TOKEN or GOOGLE_DRIVE_CLIENT_EMAIL/PRIVATE_KEY)"
+  ): Promise<{ file_id: string; web_view_link?: string; folder_name?: string; folder_id?: string }> {
+    const driveAuth = await this.getGoogleDriveAccessToken();
+    let rootFolder = await this.resolveGoogleDriveTargetFolder(driveAuth.accessToken);
+    let activeFolder = await this.resolveQuizResultGoogleDriveFolder(
+      driveAuth.accessToken,
+      rootFolder,
+      metadata
+    );
+    let uploaded;
+    try {
+      uploaded = await this.uploadGoogleDriveFile(
+        driveAuth.accessToken,
+        fileName,
+        markdown,
+        metadata,
+        activeFolder
       );
+    } catch (error) {
+      if (
+        rootFolder.source === "configured" &&
+        error instanceof ApiError &&
+        this.isRecoverableDriveParentError(error.message)
+      ) {
+        rootFolder = await this.ensureWritableGoogleDriveFolder(
+          driveAuth.accessToken,
+          config.googleDriveFolderName
+        );
+        activeFolder = await this.resolveQuizResultGoogleDriveFolder(
+          driveAuth.accessToken,
+          rootFolder,
+          metadata
+        );
+        uploaded = await this.uploadGoogleDriveFile(
+          driveAuth.accessToken,
+          fileName,
+          markdown,
+          metadata,
+          activeFolder
+        );
+      } else {
+        throw error;
+      }
     }
-    const fetchFn = (globalThis as any).fetch as
-      | ((input: string, init?: { method?: string; headers?: Record<string, string>; body?: any }) => Promise<any>)
-      | undefined;
-    if (!fetchFn) {
-      throw new ApiError(500, "Fetch API is not available");
-    }
-    let tokenResponse;
-    if (useOAuth) {
-      tokenResponse = await fetchFn("https://oauth2.googleapis.com/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          client_id: config.googleDriveClientId,
-          client_secret: config.googleDriveClientSecret,
-          refresh_token: config.googleDriveRefreshToken,
-        }).toString(),
-      });
-    } else {
-      const now = Math.floor(Date.now() / 1000);
-      const assertion = jwt.sign(
-        {
-          iss: clientEmail,
-          scope: config.googleDriveScope,
-          aud: "https://oauth2.googleapis.com/token",
-          iat: now,
-          exp: now + 3600,
-        },
-        privateKey,
-        { algorithm: "RS256" }
-      );
-      tokenResponse = await fetchFn("https://oauth2.googleapis.com/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-          assertion,
-        }).toString(),
-      });
-    }
-    const tokenPayload = await tokenResponse.json().catch(() => ({}));
-    if (!tokenResponse.ok) {
-      const message = typeof tokenPayload?.error === "string"
-        ? tokenPayload.error
-        : tokenPayload?.error_description || "Failed to obtain Google Drive token";
-      throw new ApiError(502, message);
-    }
-    const accessToken = String(tokenPayload.access_token ?? "");
-    if (!accessToken) {
-      throw new ApiError(502, "Google Drive token missing");
-    }
+    return {
+      ...uploaded,
+      folder_name: activeFolder.folderPath,
+      folder_id: activeFolder.folderId,
+    };
+  }
 
+  private async uploadGoogleDriveFile(
+    accessToken: string,
+    fileName: string,
+    markdown: string,
+    metadata: Record<string, unknown>,
+    folder: { folderId: string; folderName: string }
+  ): Promise<{ file_id: string; web_view_link?: string }> {
+    const fetchFn = this.getFetchFn();
     const boundary = `edufika_${Date.now()}`;
     const description = Object.keys(metadata || {}).length > 0 ? JSON.stringify(metadata) : undefined;
     const lowerName = fileName.toLowerCase();
@@ -4422,9 +4469,7 @@ export class SessionService {
       name: fileName,
       mimeType,
     };
-    if (folderId) {
-      metadataPayload.parents = [folderId];
-    }
+    metadataPayload.parents = [folder.folderId];
     if (description) {
       metadataPayload.description = description;
     }
@@ -4462,6 +4507,385 @@ export class SessionService {
       file_id: String(uploadPayload.id ?? ""),
       web_view_link: uploadPayload.webViewLink ? String(uploadPayload.webViewLink) : undefined,
     };
+  }
+
+  private async resolveGoogleDriveTargetFolder(
+    accessToken: string
+  ): Promise<{ folderId: string; folderName: string; folderPath: string; source: "configured" | "managed" }> {
+    const configuredFolderId = config.googleDriveFolderId.trim();
+    const fallbackFolderName = config.googleDriveFolderName.trim() || "QuizData";
+    if (!configuredFolderId) {
+      return await this.ensureWritableGoogleDriveFolder(accessToken, fallbackFolderName);
+    }
+
+    try {
+      const configuredFolder = await this.getGoogleDriveFolderById(accessToken, configuredFolderId);
+      if (!configuredFolder.canAddChildren) {
+        throw new ApiError(
+          502,
+          `Configured Google Drive folder is not writable: ${configuredFolder.folderName}`
+        );
+      }
+      return {
+        folderId: configuredFolder.folderId,
+        folderName: configuredFolder.folderName,
+        folderPath: configuredFolder.folderName,
+        source: "configured",
+      };
+    } catch (error) {
+      if (error instanceof ApiError && this.isRecoverableDriveParentError(error.message)) {
+        return await this.ensureWritableGoogleDriveFolder(accessToken, fallbackFolderName);
+      }
+      throw error;
+    }
+  }
+
+  private async ensureWritableGoogleDriveFolder(
+    accessToken: string,
+    folderName: string
+  ): Promise<{ folderId: string; folderName: string; folderPath: string; source: "managed" }> {
+    const trimmedName = folderName.trim() || "QuizData";
+    const fetchFn = this.getFetchFn();
+    const escapedName = trimmedName.replace(/'/g, "\\'");
+    const query = `name='${escapedName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+    const searchResponse = await fetchFn(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        query
+      )}&fields=files(id,name)&pageSize=1&spaces=drive`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    const searchPayload = await searchResponse.json().catch(() => ({}));
+    if (!searchResponse.ok) {
+      const message = searchPayload?.error?.message || "Failed to search Google Drive folder";
+      throw new ApiError(502, message);
+    }
+    const existingFolderId = String(searchPayload?.files?.[0]?.id ?? "").trim();
+    const existingFolderName = String(searchPayload?.files?.[0]?.name ?? "").trim();
+    if (existingFolderId) {
+      return {
+        folderId: existingFolderId,
+        folderName: existingFolderName || trimmedName,
+        folderPath: existingFolderName || trimmedName,
+        source: "managed",
+      };
+    }
+
+    const createResponse = await fetchFn(
+      "https://www.googleapis.com/drive/v3/files?fields=id,name",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json; charset=UTF-8",
+        },
+        body: JSON.stringify({
+          name: trimmedName,
+          mimeType: "application/vnd.google-apps.folder",
+        }),
+      }
+    );
+    const createPayload = await createResponse.json().catch(() => ({}));
+    if (!createResponse.ok) {
+      const message = createPayload?.error?.message || "Failed to create Google Drive folder";
+      throw new ApiError(502, message);
+    }
+    const createdFolderId = String(createPayload?.id ?? "").trim();
+    const createdFolderName = String(createPayload?.name ?? "").trim() || trimmedName;
+    if (!createdFolderId) {
+      throw new ApiError(502, "Google Drive folder ID missing after create");
+    }
+    return {
+      folderId: createdFolderId,
+      folderName: createdFolderName,
+      folderPath: createdFolderName,
+      source: "managed",
+    };
+  }
+
+  private async resolveQuizResultGoogleDriveFolder(
+    accessToken: string,
+    rootFolder: { folderId: string; folderName: string; folderPath: string; source: "configured" | "managed" },
+    metadata: Record<string, unknown>
+  ): Promise<{ folderId: string; folderName: string; folderPath: string; source: "configured" | "managed" }> {
+    const segments = this.getQuizResultFolderSegments(metadata);
+    let currentFolder = rootFolder;
+    for (const segment of segments) {
+      const childFolder = await this.ensureGoogleDriveChildFolder(
+        accessToken,
+        currentFolder.folderId,
+        currentFolder.folderPath,
+        segment
+      );
+      currentFolder = {
+        ...childFolder,
+        source: rootFolder.source,
+      };
+    }
+    return currentFolder;
+  }
+
+  private getQuizResultFolderSegments(metadata: Record<string, unknown>): string[] {
+    const classFolder = this.sanitizeGoogleDriveFolderName(
+      this.getMetadataString(metadata, "student_class", "studentClass", "class_name", "class"),
+      "Tanpa Kelas"
+    );
+    const electiveFolder = this.sanitizeGoogleDriveFolderName(
+      this.getMetadataString(
+        metadata,
+        "student_elective",
+        "studentElective",
+        "elective",
+        "elective_name"
+      ),
+      "Tanpa Peminatan"
+    );
+    return [classFolder, electiveFolder];
+  }
+
+  private getMetadataString(metadata: Record<string, unknown>, ...keys: string[]): string {
+    for (const key of keys) {
+      const value = metadata[key];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+    return "";
+  }
+
+  private sanitizeGoogleDriveFolderName(raw: string, fallback: string): string {
+    const normalized = raw
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "-")
+      .replace(/\s+/g, " ")
+      .replace(/\.+$/g, "")
+      .trim();
+    return normalized || fallback;
+  }
+
+  private async ensureGoogleDriveChildFolder(
+    accessToken: string,
+    parentFolderId: string,
+    parentFolderPath: string,
+    folderName: string
+  ): Promise<{ folderId: string; folderName: string; folderPath: string }> {
+    const fetchFn = this.getFetchFn();
+    const escapedName = folderName.replace(/'/g, "\\'");
+    const query =
+      `'${parentFolderId}' in parents and name='${escapedName}' and ` +
+      `mimeType='application/vnd.google-apps.folder' and trashed=false`;
+    const searchResponse = await fetchFn(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        query
+      )}&fields=files(id,name)&pageSize=1&spaces=drive`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    const searchPayload = await searchResponse.json().catch(() => ({}));
+    if (!searchResponse.ok) {
+      const message = searchPayload?.error?.message || "Failed to search Google Drive child folder";
+      throw new ApiError(502, message);
+    }
+
+    const existingFolderId = String(searchPayload?.files?.[0]?.id ?? "").trim();
+    const existingFolderName = String(searchPayload?.files?.[0]?.name ?? "").trim() || folderName;
+    if (existingFolderId) {
+      return {
+        folderId: existingFolderId,
+        folderName: existingFolderName,
+        folderPath: `${parentFolderPath}/${existingFolderName}`,
+      };
+    }
+
+    const createResponse = await fetchFn(
+      "https://www.googleapis.com/drive/v3/files?fields=id,name",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json; charset=UTF-8",
+        },
+        body: JSON.stringify({
+          name: folderName,
+          mimeType: "application/vnd.google-apps.folder",
+          parents: [parentFolderId],
+        }),
+      }
+    );
+    const createPayload = await createResponse.json().catch(() => ({}));
+    if (!createResponse.ok) {
+      const message = createPayload?.error?.message || "Failed to create Google Drive child folder";
+      throw new ApiError(502, message);
+    }
+    const createdFolderId = String(createPayload?.id ?? "").trim();
+    const createdFolderName = String(createPayload?.name ?? "").trim() || folderName;
+    if (!createdFolderId) {
+      throw new ApiError(502, "Google Drive child folder ID missing after create");
+    }
+    return {
+      folderId: createdFolderId,
+      folderName: createdFolderName,
+      folderPath: `${parentFolderPath}/${createdFolderName}`,
+    };
+  }
+
+  private async getGoogleDriveFolderById(
+    accessToken: string,
+    folderId: string
+  ): Promise<{ folderId: string; folderName: string; canAddChildren: boolean }> {
+    const fetchFn = this.getFetchFn();
+    const response = await fetchFn(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
+        folderId
+      )}?fields=id,name,mimeType,capabilities(canAddChildren)`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = payload?.error?.message || "Failed to inspect Google Drive folder";
+      throw new ApiError(502, message);
+    }
+    const mimeType = String(payload?.mimeType ?? "");
+    if (mimeType !== "application/vnd.google-apps.folder") {
+      throw new ApiError(502, "Configured Google Drive target is not a folder");
+    }
+    return {
+      folderId: String(payload?.id ?? folderId).trim(),
+      folderName: String(payload?.name ?? "").trim() || "QuizData",
+      canAddChildren: payload?.capabilities?.canAddChildren !== false,
+    };
+  }
+
+  private getGoogleDriveCredentialState(): {
+    configured: boolean;
+    authMode: "oauth" | "service_account" | "unconfigured";
+  } {
+    const useOAuth =
+      Boolean(config.googleDriveClientId) &&
+      Boolean(config.googleDriveClientSecret) &&
+      Boolean(config.googleDriveRefreshToken);
+    if (useOAuth) {
+      return {
+        configured: true,
+        authMode: "oauth",
+      };
+    }
+    const useServiceAccount =
+      Boolean(config.googleDriveClientEmail) && Boolean(config.googleDrivePrivateKey);
+    if (useServiceAccount) {
+      return {
+        configured: true,
+        authMode: "service_account",
+      };
+    }
+    return {
+      configured: false,
+      authMode: "unconfigured",
+    };
+  }
+
+  private async getGoogleDriveAccessToken(): Promise<{
+    accessToken: string;
+    authMode: "oauth" | "service_account";
+  }> {
+    const credentialState = this.getGoogleDriveCredentialState();
+    if (!credentialState.configured || credentialState.authMode === "unconfigured") {
+      throw new ApiError(
+        500,
+        "Google Drive credentials are not configured (set GDRIVE_CLIENT_ID/SECRET/REFRESH_TOKEN or GOOGLE_DRIVE_CLIENT_EMAIL/PRIVATE_KEY)"
+      );
+    }
+
+    const fetchFn = this.getFetchFn();
+    let tokenResponse;
+    if (credentialState.authMode === "oauth") {
+      tokenResponse = await fetchFn("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: config.googleDriveClientId,
+          client_secret: config.googleDriveClientSecret,
+          refresh_token: config.googleDriveRefreshToken,
+        }).toString(),
+      });
+    } else {
+      const now = Math.floor(Date.now() / 1000);
+      const assertion = jwt.sign(
+        {
+          iss: config.googleDriveClientEmail,
+          scope: config.googleDriveScope,
+          aud: "https://oauth2.googleapis.com/token",
+          iat: now,
+          exp: now + 3600,
+        },
+        config.googleDrivePrivateKey,
+        { algorithm: "RS256" }
+      );
+      tokenResponse = await fetchFn("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+          assertion,
+        }).toString(),
+      });
+    }
+    const tokenPayload = await tokenResponse.json().catch(() => ({}));
+    if (!tokenResponse.ok) {
+      const message =
+        typeof tokenPayload?.error === "string"
+          ? tokenPayload.error
+          : tokenPayload?.error_description || "Failed to obtain Google Drive token";
+      throw new ApiError(502, message);
+    }
+    const accessToken = String(tokenPayload.access_token ?? "");
+    if (!accessToken) {
+      throw new ApiError(502, "Google Drive token missing");
+    }
+    return {
+      accessToken,
+      authMode: credentialState.authMode,
+    };
+  }
+
+  private isRecoverableDriveParentError(message: string): boolean {
+    const normalized = message.trim().toLowerCase();
+    return (
+      normalized.includes("file not found") ||
+      normalized.includes("insufficient permissions") ||
+      normalized.includes("sufficient permissions") ||
+      normalized.includes("specified parent") ||
+      normalized.includes("not writable") ||
+      normalized.includes("not a folder") ||
+      normalized.includes("forbidden")
+    );
+  }
+
+  private getFetchFn(): (
+    input: string,
+    init?: { method?: string; headers?: Record<string, string>; body?: any }
+  ) => Promise<any> {
+    const fetchFn = (globalThis as any).fetch as
+      | ((input: string, init?: { method?: string; headers?: Record<string, string>; body?: any }) => Promise<any>)
+      | undefined;
+    if (!fetchFn) {
+      throw new ApiError(500, "Fetch API is not available");
+    }
+    return fetchFn;
   }
 
   private async buildSessionArchivePayload(client: DbClient, sessionId: string): Promise<Record<string, unknown>> {
