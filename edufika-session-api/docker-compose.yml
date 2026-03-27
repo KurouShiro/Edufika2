@@ -1,9 +1,6 @@
-version: "3.9"
-
 services:
   mariadb:
     image: mariadb:11.4
-    container_name: edufika-mariadb
     restart: unless-stopped
     command:
       - --character-set-server=utf8mb4
@@ -13,16 +10,19 @@ services:
       MARIADB_DATABASE: edufika
       MARIADB_USER: edufika
       MARIADB_PASSWORD: edufika
-    ports:
-      - "3307:3306"
     volumes:
       - edufika_mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: edufika-session-api
     restart: unless-stopped
     depends_on:
       mariadb:
@@ -31,17 +31,50 @@ services:
       - NODE_ENV=production
     env_file:
       - .env
-    ports:
-      - "8091:8091"
+    expose:
+      - "8091"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8091/health"]
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8091/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 20s
+
+  website:
+    build:
+      context: ../new_design
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+      website:
+        condition: service_healthy
+    ports:
+      - "8091:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   phpmyadmin:
     image: phpmyadmin:5.2-apache
-    container_name: edufika-phpmyadmin
     restart: unless-stopped
     depends_on:
       - mariadb
@@ -51,7 +84,7 @@ services:
       PMA_USER: root
       PMA_PASSWORD: rootpass
     ports:
-      - "8089:80"
+      - "${PHPMYADMIN_HOST_PORT:-18089}:80"
 
 volumes:
   edufika_mariadb_data:

@@ -1,0 +1,74 @@
+##  Documentation : 
+🌐 Core Backend & API
+🟢 Node.js
+👉 Node.js Official Documentation
+Node.js is a JavaScript runtime for building servers and APIs.
+🔗 REST API (Concept & Guides)
+👉 https://restfulapi.net/
+👉 https://developer.mozilla.org/en-US/docs/Glossary/REST
+
+✔ REST is an architectural style for building APIs over HTTP (not a single official spec).
+
+🐳 DevOps & Infrastructure
+🐳 Docker
+👉 Docker Official Docs
+
+Includes:
+
+Docker Engine
+Docker Compose
+Container guides
+Deployment examples
+🌐 Nginx
+👉 https://nginx.org/en/docs/
+
+Used for:
+
+Reverse proxy
+Load balancing
+Serving static websites
+🗄️ Database / SQL
+🧠 SQL (General Documentation)
+👉 https://www.w3schools.com/sql/
+👉 https://dev.mysql.com/doc/
+🐬 MySQL / MariaDB (Recommended for you)
+👉 https://mariadb.com/kb/en/documentation/
+👉 https://dev.mysql.com/doc/
+🧑‍💻 Version Control
+🐙 GitHub
+👉 https://docs.github.com/
+
+Includes:
+
+Git basics
+Repositories
+Actions (CI/CD)
+Collaboration workflows
+📱 Kotlin & Android Development
+🟣 Kotlin
+👉 https://kotlinlang.org/docs/home.html
+
+Kotlin is a modern language widely used for Android apps.
+
+⚙️ Gradle
+👉 https://docs.gradle.org/
+
+Used for:
+
+Build automation
+Dependency management
+📱 Android Studio
+👉 https://developer.android.com/studio
+📦 Android SDK (API Level 27 / Android 8.1)
+👉 https://developer.android.com/about/versions/oreo
+📱 Cross-Platform & Frontend
+⚛️ React Native
+👉 https://reactnative.dev/docs/getting-started
+
+Used for:
+
+Building mobile apps with JavaScript
+🔵 TypeScript
+👉 https://www.typescriptlang.org/docs/
+
+TypeScript adds static typing to JavaScript, widely used in modern web apps.

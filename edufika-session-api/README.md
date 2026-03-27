@@ -24,16 +24,24 @@ Ensure `.env` contains:
 
 ```env
 DB_DIALECT=mysql
-DATABASE_URL=mysql://edufika:edufika@localhost:3306/edufika
+DATABASE_URL=mysql://edufika:edufika@mariadb:3306/edufika
+PORT=8091
 ```
 
-3. Run MariaDB + phpMyAdmin (Docker compose):
+3. Run website + MariaDB + API + Nginx reverse proxy + phpMyAdmin (Docker compose):
 
 ```bash
 docker compose up -d
 ```
 
-phpMyAdmin will be available at `http://localhost:8089`.
+The public stack entrypoint stays on `http://localhost:8091`.
+- Website is served from `/`
+- API is available from `/api/*`
+- Legacy API routes such as `/session/*`, `/student/*`, `/admin/*`, `/exam/*`, `/quiz/*`, and `/health` are still proxied to the backend
+- Requests pass through the bundled Nginx container before reaching the internal `website` and `app` services
+
+phpMyAdmin will be available at `http://localhost:18089` by default.
+Change `PHPMYADMIN_HOST_PORT` if that port is already taken.
 Use username `root` and password `rootpass`, or app user `edufika` / `edufika`.
 
 4. Run migrations.
@@ -108,7 +116,7 @@ Each `exam_session_id` keeps one active token per role (`student`, `admin`).
 
 ## WebSocket
 
-Connect to `ws://localhost:8088` for telemetry events (`heartbeat`, `violation`, `session_locked`, etc.).
+Connect to `ws://localhost:8091/ws` when using Docker Compose, or `ws://localhost:8088` when running `npm run dev` directly.
 
 ## Notes
 
