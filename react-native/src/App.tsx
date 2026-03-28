@@ -23,6 +23,7 @@ import QuizTeacherScreen, { type QuizTeacherCache } from "./screens/QuizTeacherS
 import Register from "./screens/Register";
 import Settings from "./screens/Settings";
 import SplashScreen from "./screens/SplashScreen";
+import StartScreen from "./screens/Start";
 import SuccessScreen from "./screens/SuccessScreen";
 import TokenLogin from "./screens/TokenLogin";
 import URLWhitelist from "./screens/URLWhitelist";
@@ -35,6 +36,7 @@ const ExamBrowserScreen = lazy(() => import("./screens/ExamBrowserScreen"));
 const QRScannerScreen = lazy(() => import("./screens/QRScannerScreen"));
 
 type ScreenId =
+  | "StartScreen"
   | "SplashScreen"
   | "LoginSelection"
   | "TokenLogin"
@@ -920,7 +922,7 @@ function generateSessionId(): string {
 }
 
 export default function App() {
-  const [screen, setScreen] = useState<ScreenId>("SplashScreen");
+  const [screen, setScreen] = useState<ScreenId>("StartScreen");
   const [returnScreen, setReturnScreen] = useState<ScreenId>("LoginSelection");
   const [developerOrigin, setDeveloperOrigin] = useState<ScreenId>("LoginSelection");
   const [role, setRole] = useState<Role>("guest");
@@ -928,9 +930,6 @@ export default function App() {
   const [language, setLanguage] = useState<AppLanguage>("id");
   const [themeId, setThemeId] = useState<ThemeId>(getActiveThemeId());
 
-  const [bootMessage, setBootMessage] = useState(
-    tr("id", "Memulai modul keamanan...", "Bootstrapping secure module...")
-  );
   const [statusMessage, setStatusMessage] = useState(
     tr("id", "Masukkan token sesi untuk melanjutkan.", "Enter session token to continue.")
   );
@@ -1088,7 +1087,8 @@ export default function App() {
   const legacyAdminWorkspaceRef = useRef<AdminWorkspaceEntry | null>(null);
   const pendingAdminTokenRef = useRef<string | null>(null);
   const pendingAdminTokenOptionsRef = useRef<{ preserveBackendSession: boolean } | null>(null);
-  const startupPermissionGateActive = screen === "SplashScreen" || screen === "PermissionsScreen";
+  const startupPermissionGateActive =
+    screen === "StartScreen" || screen === "SplashScreen" || screen === "PermissionsScreen";
   const runtimeKioskEnabled = kioskEnabled && !startupPermissionGateActive;
 
   const applyAdminWorkspaceEntry = (
@@ -1227,14 +1227,6 @@ export default function App() {
     pendingAdminTokenOptionsRef.current = null;
     runSecurityCall(() => securityModule?.clearAdminWorkspaceCache?.());
   };
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setBootMessage(tr(language, "Semua layanan inti aktif.", "All core services online."));
-      setScreen("PermissionsScreen");
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -3449,8 +3441,24 @@ export default function App() {
       }
     : null;
 
+  if (screen === "StartScreen") {
+    return (
+      <StartScreen
+        language={language}
+        onComplete={() => {
+          setScreen("PermissionsScreen");
+        }}
+      />
+    );
+  }
+
   if (screen === "SplashScreen") {
-    return <SplashScreen bootMessage={bootMessage} language={language} />;
+    return (
+      <SplashScreen
+        bootMessage={tr(language, "Memuat modul sistem...", "Loading system module...")}
+        language={language}
+      />
+    );
   }
 
   if (screen === "LoginSelection") {
