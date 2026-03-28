@@ -11,20 +11,19 @@ Ruang lingkup:
 
 0) Port/konfigurasi proyek saat ini yang digunakan pada panduan ini
 -------------------------------------------------------------------
-- Port host MariaDB: 3307 (container 3306)
-- phpMyAdmin: 8089
+- Port host MariaDB: internal-only via Docker network (`mariadb:3306`)
+- phpMyAdmin: 18089
 - Backend API: 8091
 - Host bind backend: 0.0.0.0
 
 Nilai file yang diharapkan:
 - `docker-compose.yml`:
-  - mapping port mariadb: `"3307:3306"`
-  - mapping port phpmyadmin: `"8089:80"`
+  - mapping port phpmyadmin: `"${PHPMYADMIN_HOST_PORT:-18089}:80"`
 - `edufika-session-api/.env`:
   - `HOST=0.0.0.0`
   - `PORT=8091`
   - `DB_DIALECT=mysql`
-  - `DATABASE_URL=mysql://edufika:edufika@localhost:3307/edufika`
+  - `DATABASE_URL=mysql://edufika:edufika@mariadb:3306/edufika`
 
 
 1) Buka terminal di root repo
@@ -38,14 +37,14 @@ cd C:\Users\MyBook Hype AMD\AndroidStudioProjects\Edufika2
 docker compose up -d
 
 Periksa container:
-docker ps
+docker compose ps
 
 Container yang diharapkan:
-- edufika-mariadb
-- edufika-phpmyadmin
+- mariadb
+- phpmyadmin
 
 Buka phpMyAdmin:
-- http://localhost:8089
+- http://localhost:18089
 - user: root
 - pass: rootpass
 
@@ -233,7 +232,8 @@ LIMIT 20;
 - Install Docker Desktop, lalu restart terminal.
 
 [B] Port 3306 sudah dipakai
-- Pertahankan mapping compose `3307:3306` dan gunakan `3307` di `DATABASE_URL`.
+- Pastikan MariaDB lama sudah dihentikan, atau biarkan stack baru memakai jaringan internal Docker tanpa publish host port.
+- Gunakan `mariadb:3306` di `DATABASE_URL`.
 
 [C] `EADDRINUSE` pada 8091
 - Proses lain sedang memakai port API.

@@ -22,8 +22,8 @@ Root Workspace
 - Aplikasi Android: diinstal melalui Gradle (`:app:installDebug`)
 - Metro: `localhost:8081`
 - Backend API: `0.0.0.0:8091`
-- Port host MariaDB: `3307` (container `3306`)
-- phpMyAdmin: `http://localhost:8089`
+- Port host MariaDB: internal-only via Docker network (`mariadb:3306`)
+- phpMyAdmin: `http://localhost:18089` (configurable via `PHPMYADMIN_HOST_PORT`)
 
 File kunci:
 - `docker-compose.yml`
@@ -169,8 +169,8 @@ Validasi endpoint berikut:
 
 11) Maintenance Database (MariaDB/phpMyAdmin)
 ----------------------------------------------
-Buka:
-- `http://localhost:8089`
+ Buka:
+- `http://localhost:18089`
 
 Kredensial lokal bawaan dari compose:
 - user: `root`

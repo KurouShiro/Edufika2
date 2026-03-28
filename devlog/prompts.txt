@@ -583,7 +583,7 @@ Seharusnya mengembalikan `ok: true`.
 
 phpMyAdmin local debug URL:
 ```text
-http://localhost:8089
+http://localhost:18089
 ```
 
 File checklist referensi:
