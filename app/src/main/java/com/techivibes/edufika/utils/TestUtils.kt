@@ -11,6 +11,13 @@ import java.util.Locale
 
 object TestUtils {
 
+    private val legacyBackendBaseUrls = setOf(
+        "http://103.27.207.53:8091",
+        "https://103.27.207.53:8091",
+        "https://merrilee-interangular-ula.ngrok-free.dev",
+        "http://merrilee-interangular-ula.ngrok-free.dev"
+    )
+
     fun showToast(context: Context, message: String) {
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
     }
@@ -32,6 +39,15 @@ object TestUtils {
             value
         } else {
             "https://$value"
+        }
+    }
+
+    fun migrateBackendBaseUrl(raw: String): String {
+        val normalized = normalizeUrl(raw).trimEnd('/')
+        return if (legacyBackendBaseUrls.contains(normalized)) {
+            TestConstants.SERVER_BASE_URL
+        } else {
+            normalized
         }
     }
 

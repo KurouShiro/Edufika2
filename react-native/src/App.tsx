@@ -26,10 +26,24 @@ import SplashScreen from "./screens/SplashScreen";
 import StartScreen from "./screens/Start";
 import SuccessScreen from "./screens/SuccessScreen";
 import TokenLogin from "./screens/TokenLogin";
+import UpdateScreen from "./screens/Update";
 import URLWhitelist from "./screens/URLWhitelist";
 import UserLogin from "./screens/UserLogin";
 import ViolationScreen from "./screens/ViolationScreen";
-import { ThemeId, getActiveThemeId, setActiveTheme } from "./screens/Layout";
+import { ThemeId, getActiveThemeId, setActiveTheme, themePresets } from "./screens/Layout";
+import {
+  checkForUpdates,
+  confirmCurrentBundleReady,
+  installDownloadedNativeUpdate,
+  openUnknownAppSourcesSettings,
+  restartApp,
+  startNativeUpdate,
+  startOtaUpdate,
+  subscribeToUpdateProgress,
+  type RemoteConfigPayload,
+  type UpdateProgressPayload,
+  type UpdateSnapshot,
+} from "./nativeUpdates";
 import { fetchGoogleDriveHealth, type DriveHealthResult } from "./utils/quizResultExport";
 
 const ExamBrowserScreen = lazy(() => import("./screens/ExamBrowserScreen"));
@@ -40,6 +54,7 @@ type ScreenId =
   | "SplashScreen"
   | "LoginSelection"
   | "TokenLogin"
+  | "UpdateScreen"
   | "UserLogin"
   | "Register"
   | "InAppQuizSelection"
@@ -253,7 +268,13 @@ const DEFAULT_QUIZ_TEACHER_CACHE: QuizTeacherCache = {
 };
 
 const defaultWhitelist = ["https://example.org", "https://school.ac.id/exam"];
-const DEFAULT_BACKEND_BASE_URL = "http://103.27.207.53:8091";
+const DEFAULT_BACKEND_BASE_URL = "https://srv1536310.hstgr.cloud";
+const LEGACY_DEFAULT_BACKEND_BASE_URLS = new Set([
+  "http://103.27.207.53:8091",
+  "https://103.27.207.53:8091",
+  "https://merrilee-interangular-ula.ngrok-free.dev",
+  "http://merrilee-interangular-ula.ngrok-free.dev",
+]);
 
 type ClipboardModuleShape = {
   setString?: (value: string) => void;
@@ -292,6 +313,15 @@ type EdufikaSecurityModuleShape = {
   openCameraXQrScanner?: () => Promise<string>;
   exitApp?: () => void;
 };
+
+type UpdateFlowMode = "startup" | "manual";
+type UpdateActionId =
+  | "continue"
+  | "retry"
+  | "restart"
+  | "install_native"
+  | "install_downloaded_native"
+  | "open_unknown_sources";
 
 const securityModule: EdufikaSecurityModuleShape | undefined = (
   NativeModules as { EdufikaSecurity?: EdufikaSecurityModuleShape }
@@ -342,14 +372,16 @@ function normalizeBackendBaseUrl(raw: string): string {
     const origin = parsed.origin;
     const rawPath = parsed.pathname.replace(/\/+$/, "");
     if (!rawPath || rawPath === "/") {
-      return origin;
+      return LEGACY_DEFAULT_BACKEND_BASE_URLS.has(origin) ? DEFAULT_BACKEND_BASE_URL : origin;
     }
     if (/\/healthz?$/i.test(rawPath)) {
-      return origin;
+      return LEGACY_DEFAULT_BACKEND_BASE_URLS.has(origin) ? DEFAULT_BACKEND_BASE_URL : origin;
     }
-    return `${origin}${rawPath}`;
+    const normalized = `${origin}${rawPath}`;
+    return LEGACY_DEFAULT_BACKEND_BASE_URLS.has(normalized) ? DEFAULT_BACKEND_BASE_URL : normalized;
   } catch {
-    return withProtocol.replace(/\/+$/, "");
+    const normalized = withProtocol.replace(/\/+$/, "");
+    return LEGACY_DEFAULT_BACKEND_BASE_URLS.has(normalized) ? DEFAULT_BACKEND_BASE_URL : normalized;
   }
 }
 
@@ -921,11 +953,63 @@ function generateSessionId(): string {
   return `SES-${randomPart}`;
 }
 
+function createDefaultUpdateProgress(
+  message = "Preparing update runtime..."
+): UpdateProgressPayload {
+  return {
+    stage: "idle",
+    kind: "manifest",
+    message,
+    progress: 0,
+    totalBytes: -1,
+    downloadedBytes: -1,
+    versionLabel: "",
+    restartRequired: false,
+    installerLaunched: false,
+    timestamp: Date.now(),
+  };
+}
+
+function formatByteSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "--";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const kib = bytes / 1024;
+  if (kib < 1024) {
+    return `${kib.toFixed(1)} KB`;
+  }
+  const mib = kib / 1024;
+  return `${mib.toFixed(1)} MB`;
+}
+
 export default function App() {
   const [screen, setScreen] = useState<ScreenId>("StartScreen");
   const [returnScreen, setReturnScreen] = useState<ScreenId>("LoginSelection");
   const [developerOrigin, setDeveloperOrigin] = useState<ScreenId>("LoginSelection");
   const [role, setRole] = useState<Role>("guest");
+  const [updateMode, setUpdateMode] = useState<UpdateFlowMode>("startup");
+  const [updateReturnScreen, setUpdateReturnScreen] = useState<ScreenId>("PermissionsScreen");
+  const [updateRunId, setUpdateRunId] = useState(0);
+  const [updateSnapshot, setUpdateSnapshot] = useState<UpdateSnapshot | null>(null);
+  const [updateProgressState, setUpdateProgressState] = useState<UpdateProgressPayload>(() =>
+    createDefaultUpdateProgress()
+  );
+  const [updateLogs, setUpdateLogs] = useState<string[]>([
+    "Boot channel armed.",
+    "Awaiting manifest sync.",
+  ]);
+  const [updatePrimaryAction, setUpdatePrimaryAction] = useState<UpdateActionId | null>(null);
+  const [updateSecondaryAction, setUpdateSecondaryAction] = useState<UpdateActionId | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [remoteConfig, setRemoteConfig] = useState<RemoteConfigPayload>({
+    version: "1",
+    values: {},
+  });
+  const [statusBanner, setStatusBanner] = useState("");
+  const [allowManualThemeSelection, setAllowManualThemeSelection] = useState(true);
 
   const [language, setLanguage] = useState<AppLanguage>("id");
   const [themeId, setThemeId] = useState<ThemeId>(getActiveThemeId());
@@ -1088,7 +1172,10 @@ export default function App() {
   const pendingAdminTokenRef = useRef<string | null>(null);
   const pendingAdminTokenOptionsRef = useRef<{ preserveBackendSession: boolean } | null>(null);
   const startupPermissionGateActive =
-    screen === "StartScreen" || screen === "SplashScreen" || screen === "PermissionsScreen";
+    screen === "StartScreen" ||
+    screen === "SplashScreen" ||
+    screen === "UpdateScreen" ||
+    screen === "PermissionsScreen";
   const runtimeKioskEnabled = kioskEnabled && !startupPermissionGateActive;
 
   const applyAdminWorkspaceEntry = (
@@ -1228,6 +1315,313 @@ export default function App() {
     runSecurityCall(() => securityModule?.clearAdminWorkspaceCache?.());
   };
 
+  const appendUpdateLog = (line: string) => {
+    const normalized = line.trim();
+    if (!normalized) {
+      return;
+    }
+    setUpdateLogs((current) => {
+      if (current[current.length - 1] === normalized) {
+        return current;
+      }
+      return [...current.slice(-4), normalized];
+    });
+  };
+
+  const applyRemoteConfigPayload = (nextConfig: RemoteConfigPayload) => {
+    setRemoteConfig(nextConfig);
+    const values = nextConfig.values ?? {};
+    const nextBanner = typeof values.statusBanner === "string" ? values.statusBanner.trim() : "";
+    setStatusBanner(nextBanner);
+
+    const nextAllowManualThemeSelection =
+      typeof values.allowManualThemeSelection === "boolean" ? values.allowManualThemeSelection : true;
+    setAllowManualThemeSelection(nextAllowManualThemeSelection);
+
+    const preferredTheme = typeof values.preferredThemeId === "string" ? values.preferredThemeId.trim() : "";
+    if (preferredTheme && themePresets.some((preset) => preset.id === preferredTheme)) {
+      const typedThemeId = preferredTheme as ThemeId;
+      setThemeId(typedThemeId);
+      setActiveTheme(typedThemeId);
+    }
+
+    const previousRemoteBackend =
+      typeof remoteConfig.values.defaultBackendBaseUrl === "string"
+        ? normalizeBackendBaseUrl(remoteConfig.values.defaultBackendBaseUrl)
+        : "";
+    const remoteBackend =
+      typeof values.defaultBackendBaseUrl === "string"
+        ? normalizeBackendBaseUrl(values.defaultBackendBaseUrl)
+        : "";
+    if (
+      remoteBackend &&
+      (!normalizeBackendBaseUrl(backendBaseUrl) ||
+        normalizeBackendBaseUrl(backendBaseUrl) === DEFAULT_BACKEND_BASE_URL ||
+        normalizeBackendBaseUrl(backendBaseUrl) === previousRemoteBackend)
+    ) {
+      setBackendBaseUrl(remoteBackend);
+    }
+  };
+
+  const finishUpdateFlow = () => {
+    setUpdateBusy(false);
+    setUpdatePrimaryAction(null);
+    setUpdateSecondaryAction(null);
+    setScreen(updateReturnScreen);
+  };
+
+  const beginUpdateFlow = (mode: UpdateFlowMode, nextReturnScreen: ScreenId) => {
+    setUpdateMode(mode);
+    setUpdateReturnScreen(nextReturnScreen);
+    setUpdateSnapshot(null);
+    setUpdateBusy(true);
+    setUpdateProgressState(
+      createDefaultUpdateProgress(
+        mode === "startup" ? "Preparing boot-time updater..." : "Preparing manual update check..."
+      )
+    );
+    setUpdateLogs(["Boot channel armed.", "Awaiting manifest sync."]);
+    setUpdatePrimaryAction(null);
+    setUpdateSecondaryAction(null);
+    setScreen("UpdateScreen");
+    setUpdateRunId((current) => current + 1);
+  };
+
+  const runNativeInstallFlow = async (mandatory = false) => {
+    setUpdateBusy(true);
+    setUpdatePrimaryAction(null);
+    setUpdateSecondaryAction(null);
+    try {
+      const nextSnapshot = await startNativeUpdate();
+      setUpdateSnapshot(nextSnapshot);
+      if (nextSnapshot.native.installerPermissionGranted) {
+        setUpdatePrimaryAction(mandatory ? "install_downloaded_native" : "continue");
+        setUpdateSecondaryAction(mandatory ? null : "install_downloaded_native");
+      } else {
+        setUpdatePrimaryAction("open_unknown_sources");
+        setUpdateSecondaryAction(mandatory ? "install_downloaded_native" : "continue");
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : tr(language, "Update native gagal.", "Native update failed.");
+      setUpdateProgressState({
+        ...createDefaultUpdateProgress(message),
+        stage: "error",
+        kind: "native",
+        progress: 1,
+      });
+      appendUpdateLog(message);
+      setUpdatePrimaryAction("retry");
+      setUpdateSecondaryAction("continue");
+    } finally {
+      setUpdateBusy(false);
+    }
+  };
+
+  const handleUpdateAction = async (action: UpdateActionId | null) => {
+    if (!action) {
+      return;
+    }
+    if (action === "continue") {
+      finishUpdateFlow();
+      return;
+    }
+    if (action === "retry") {
+      beginUpdateFlow(updateMode, updateReturnScreen);
+      return;
+    }
+    if (action === "restart") {
+      restartApp();
+      return;
+    }
+    if (action === "install_native") {
+      await runNativeInstallFlow();
+      return;
+    }
+    if (action === "install_downloaded_native") {
+      setUpdateBusy(true);
+      try {
+        const launched = await installDownloadedNativeUpdate();
+        if (launched) {
+          appendUpdateLog("Android installer relaunched.");
+          setUpdatePrimaryAction(updateSnapshot?.native.mandatory ? "install_downloaded_native" : "continue");
+        } else {
+          appendUpdateLog("No downloaded APK is ready yet.");
+        }
+      } catch (error) {
+        appendUpdateLog(error instanceof Error ? error.message : "Failed to launch APK installer.");
+      } finally {
+        setUpdateBusy(false);
+      }
+      return;
+    }
+    if (action === "open_unknown_sources") {
+      setUpdateBusy(true);
+      try {
+        await openUnknownAppSourcesSettings();
+        appendUpdateLog("Opened Android unknown app sources settings.");
+      } catch (error) {
+        appendUpdateLog(error instanceof Error ? error.message : "Failed to open permission settings.");
+      } finally {
+        setUpdateBusy(false);
+      }
+    }
+  };
+
+  const updateActionLabel = (action: UpdateActionId | null): string | undefined => {
+    if (!action) {
+      return undefined;
+    }
+    if (action === "continue") {
+      return tr(language, "Lanjutkan", "Continue");
+    }
+    if (action === "retry") {
+      return tr(language, "Coba Lagi", "Retry");
+    }
+    if (action === "restart") {
+      return tr(language, "Restart Aplikasi", "Restart App");
+    }
+    if (action === "install_native") {
+      return tr(language, "Install Update Native", "Install Native Update");
+    }
+    if (action === "install_downloaded_native") {
+      return tr(language, "Buka Installer Lagi", "Open Installer Again");
+    }
+    if (action === "open_unknown_sources") {
+      return tr(language, "Izinkan Install APK", "Allow APK Installs");
+    }
+    return undefined;
+  };
+
+  useEffect(() => {
+    confirmCurrentBundleReady();
+    const subscription = subscribeToUpdateProgress((payload) => {
+      setUpdateProgressState(payload);
+      const nextMessage = payload.message.trim();
+      if (!nextMessage) {
+        return;
+      }
+      setUpdateLogs((current) => {
+        if (current[current.length - 1] === nextMessage) {
+          return current;
+        }
+        return [...current.slice(-4), nextMessage];
+      });
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (screen !== "UpdateScreen" || updateRunId <= 0) {
+      return;
+    }
+    let active = true;
+    let continueTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const run = async () => {
+      setUpdateBusy(true);
+      setUpdatePrimaryAction(null);
+      setUpdateSecondaryAction(null);
+
+      try {
+        const snapshot = await checkForUpdates(normalizeBackendBaseUrl(backendBaseUrl));
+        if (!active) {
+          return;
+        }
+        setUpdateSnapshot(snapshot);
+        applyRemoteConfigPayload(snapshot.remoteConfig);
+        appendUpdateLog(`Remote config ${snapshot.remoteConfig.version} synchronized.`);
+
+        if (snapshot.ota.available) {
+          appendUpdateLog(`OTA package detected: ${snapshot.ota.version ?? "unknown"}.`);
+          const otaSnapshot = await startOtaUpdate();
+          if (!active) {
+            return;
+          }
+          setUpdateSnapshot(otaSnapshot);
+          setUpdateBusy(false);
+          setUpdatePrimaryAction("restart");
+          setUpdateSecondaryAction(null);
+          appendUpdateLog("React Native package staged. Restart required.");
+          return;
+        }
+
+        if (snapshot.native.available) {
+          if (snapshot.native.mandatory) {
+            appendUpdateLog(`Mandatory native release detected: ${snapshot.native.versionName ?? "unknown"}.`);
+            await runNativeInstallFlow(true);
+            return;
+          }
+
+          setUpdateBusy(false);
+          setUpdatePrimaryAction("install_native");
+          setUpdateSecondaryAction("continue");
+          appendUpdateLog(`Optional native release available: ${snapshot.native.versionName ?? "unknown"}.`);
+          setUpdateProgressState({
+            ...createDefaultUpdateProgress("Optional native shell update is available."),
+            stage: "ready",
+            kind: "native",
+            progress: 1,
+            versionLabel: snapshot.native.versionName ?? "",
+          });
+          return;
+        }
+
+        setUpdateBusy(false);
+        setUpdateProgressState({
+          ...createDefaultUpdateProgress(
+            updateMode === "startup"
+              ? "System synchronized. Continuing boot sequence..."
+              : "System synchronized. No newer package is available."
+          ),
+          stage: "completed",
+          kind: "manifest",
+          progress: 1,
+        });
+        appendUpdateLog("Runtime is already current.");
+
+        if (updateMode === "startup") {
+          continueTimer = setTimeout(() => {
+            if (active) {
+              finishUpdateFlow();
+            }
+          }, 720);
+        } else {
+          setUpdatePrimaryAction("continue");
+        }
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        const message =
+          error instanceof Error
+            ? error.message
+            : tr(language, "Gagal memeriksa update.", "Failed to check for updates.");
+        setUpdateBusy(false);
+        setUpdateProgressState({
+          ...createDefaultUpdateProgress(message),
+          stage: "error",
+          kind: "manifest",
+          progress: 1,
+        });
+        appendUpdateLog(message);
+        setUpdatePrimaryAction("retry");
+        setUpdateSecondaryAction(updateMode === "startup" ? "continue" : null);
+      }
+    };
+
+    void run();
+
+    return () => {
+      active = false;
+      if (continueTimer) {
+        clearTimeout(continueTimer);
+      }
+    };
+  }, [screen, updateRunId]);
+
   useEffect(() => {
     let mounted = true;
     const hydrateKiosk = async () => {
@@ -1306,12 +1700,13 @@ export default function App() {
         if (version === 2 && isRecord(parsed)) {
           const backendUrl =
             typeof parsed.backendBaseUrl === "string" ? parsed.backendBaseUrl.trim() : "";
-          if (backendUrl) {
-            setBackendBaseUrl(backendUrl);
+          const normalizedBackendUrl = backendUrl ? normalizeBackendBaseUrl(backendUrl) : "";
+          if (normalizedBackendUrl) {
+            setBackendBaseUrl(normalizedBackendUrl);
           }
           adminWorkspaceCacheRef.current = {
             version: ADMIN_WORKSPACE_SCHEMA_VERSION,
-            backendBaseUrl: backendUrl || adminWorkspaceCacheRef.current.backendBaseUrl,
+            backendBaseUrl: normalizedBackendUrl || adminWorkspaceCacheRef.current.backendBaseUrl,
             admins: isRecord(parsed.admins)
               ? (parsed.admins as Record<string, AdminWorkspaceEntry>)
               : {},
@@ -1319,7 +1714,7 @@ export default function App() {
         } else if (version === 1 && isRecord(parsed)) {
           const legacy = parsed as AdminWorkspaceSnapshotV1;
           if (typeof legacy.backendBaseUrl === "string" && legacy.backendBaseUrl.trim()) {
-            setBackendBaseUrl(legacy.backendBaseUrl.trim());
+            setBackendBaseUrl(normalizeBackendBaseUrl(legacy.backendBaseUrl.trim()));
           }
           legacyAdminWorkspaceRef.current = normalizeAdminWorkspaceEntry(legacy);
         }
@@ -2730,6 +3125,10 @@ export default function App() {
     setScreen("Settings");
   };
 
+  const openUpdateFlowFrom = (from: ScreenId, mode: UpdateFlowMode = "manual") => {
+    beginUpdateFlow(mode, from);
+  };
+
   const clearAdminWorkspaceState = (options?: { clearCache?: boolean }) => {
     resetAdminWorkspaceState();
     if (options?.clearCache) {
@@ -3440,14 +3839,76 @@ export default function App() {
         quizResult: selectedMonitorQuizResult,
       }
     : null;
+  const updateTargetVersionLabel =
+    updateProgressState.versionLabel ||
+    updateSnapshot?.ota.version ||
+    updateSnapshot?.native.versionName ||
+    "";
+  const updateProgressLabel =
+    updateProgressState.totalBytes > 0 && updateProgressState.downloadedBytes >= 0
+      ? `${Math.round(updateProgressState.progress * 100)}% // ${formatByteSize(
+          updateProgressState.downloadedBytes
+        )} / ${formatByteSize(updateProgressState.totalBytes)}`
+      : `${Math.round(updateProgressState.progress * 100)}%`;
+  const settingsUpdateSummary = updateSnapshot?.native.available
+    ? tr(
+        language,
+        `Update native ${updateSnapshot.native.versionName ?? ""} tersedia.`,
+        `Native update ${updateSnapshot.native.versionName ?? ""} is available.`
+      )
+    : updateSnapshot?.ota.available
+      ? tr(
+          language,
+          `Patch React Native ${updateSnapshot.ota.version ?? ""} tersedia.`,
+          `React Native patch ${updateSnapshot.ota.version ?? ""} is available.`
+        )
+      : tr(language, "Build saat ini sudah sinkron.", "Current build is synchronized.");
 
   if (screen === "StartScreen") {
     return (
       <StartScreen
         language={language}
         onComplete={() => {
-          setScreen("PermissionsScreen");
+          beginUpdateFlow("startup", "PermissionsScreen");
         }}
+      />
+    );
+  }
+
+  if (screen === "UpdateScreen") {
+    return (
+      <UpdateScreen
+        language={language}
+        title={tr(language, "EDUFIKA UPDATE LINK", "EDUFIKA UPDATE LINK")}
+        subtitle={tr(
+          language,
+          "Menyinkronkan remote config, patch React Native, dan runtime native.",
+          "Synchronizing remote config, React Native patches, and the native runtime."
+        )}
+        statusMessage={updateProgressState.message}
+        detailMessage={
+          updateSnapshot?.native.available
+            ? updateSnapshot.native.notes
+            : updateSnapshot?.ota.available
+              ? updateSnapshot.ota.notes
+              : statusBanner
+        }
+        progress={updateProgressState.progress}
+        progressLabel={updateProgressLabel}
+        channelLabel={updateSnapshot?.channel ?? "stable"}
+        currentVersionLabel={
+          updateSnapshot
+            ? `${updateSnapshot.current.versionName} (${updateSnapshot.current.versionCode})`
+            : "BOOTSTRAP"
+        }
+        targetVersionLabel={updateTargetVersionLabel}
+        remoteConfigVersion={remoteConfig.version}
+        logs={updateLogs}
+        busy={updateBusy}
+        primaryActionLabel={updateActionLabel(updatePrimaryAction)}
+        secondaryActionLabel={updateActionLabel(updateSecondaryAction)}
+        onPrimaryAction={() => void handleUpdateAction(updatePrimaryAction)}
+        onSecondaryAction={() => void handleUpdateAction(updateSecondaryAction)}
       />
     );
   }
@@ -4915,6 +5376,14 @@ export default function App() {
       <Settings
         language={language}
         themeId={themeId}
+        allowManualThemeSelection={allowManualThemeSelection}
+        appVersionLabel={
+          updateSnapshot
+            ? `${updateSnapshot.current.versionName} (${updateSnapshot.current.versionCode})`
+            : "1.0.1"
+        }
+        updateSummary={settingsUpdateSummary}
+        statusBanner={statusBanner}
         onSelectLanguage={(nextLanguage) => {
           setLanguage(nextLanguage);
           if (role === "guest") {
@@ -4958,6 +5427,7 @@ export default function App() {
             )
           );
         }}
+        onOpenUpdater={() => openUpdateFlowFrom("Settings")}
         onBack={() => setScreen(returnScreen)}
       />
     );

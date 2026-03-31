@@ -202,7 +202,7 @@ export default function DeveloperAccessScreen({
             value={backendBaseUrl}
             onChangeText={onBackendBaseUrlChange}
             label={tr(language, "Backend Base URL", "Backend Base URL")}
-            placeholder="http://192.168.x.x:8091"
+            placeholder="https://srv1536310.hstgr.cloud"
             autoCapitalize="none"
             editable={unlocked}
           />

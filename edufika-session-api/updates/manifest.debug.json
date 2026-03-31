@@ -1,0 +1,31 @@
+{
+  "channel": "debug",
+  "generatedAt": "2026-03-31T06:06:28.833Z",
+  "remoteConfig": {
+    "version": "2026.03.31.0606",
+    "values": {
+      "defaultBackendBaseUrl": "https://srv1536310.hstgr.cloud",
+      "preferredThemeId": "matrix",
+      "statusBanner": "Edufika debug runtime online.",
+      "allowManualThemeSelection": true,
+      "allowDeveloperAccess": true
+    }
+  },
+  "ota": {
+    "version": "2026.03.31-0606-debug",
+    "mandatory": false,
+    "minNativeVersionCode": 10003,
+    "bundleUrl": "/updates/files/ota/edufika-rn-debug-update.zip",
+    "sha256": "bbc24a3f1d111eff6939ae66ef6ba4e7271a2151b178e5e7da7dabe05d1182c2",
+    "notes": "React Native OTA package for the debug channel."
+  },
+  "native": {
+    "versionCode": 10003,
+    "versionName": "1.0.3-debug",
+    "mandatory": false,
+    "apkUrl": "/updates/files/native/app-debug.apk",
+    "packageName": "com.techivibes.edufika.debug",
+    "sha256": "5d79f2936b13c9df4fc605cd0cb146b9a3e9ab868d2dc353e3dbce4431bd867f",
+    "notes": "Native APK package for the debug channel."
+  }
+}

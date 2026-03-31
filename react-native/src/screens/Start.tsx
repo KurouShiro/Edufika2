@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import {
   Animated,
   Dimensions,
   Easing,
   Image,
+  Platform,
   SafeAreaView,
   StatusBar,
   StyleSheet,
@@ -18,89 +19,61 @@ type StartProps = {
 };
 
 const LOGO_SOURCE = require("../../assets/images/logo.jpeg");
-const { width: screenWidth, height: screenHeight } = Dimensions.get("window");
-const logoFrameSize = Math.min(screenWidth * 0.56, 290);
-const crtHeight = Math.min(screenHeight * 0.56, 430);
-const TILES_PER_ROW = 8;
-const TILES_PER_COL = 8;
-const tileSize = logoFrameSize / TILES_PER_ROW;
+const MONO_FONT = Platform.select({
+  ios: "Menlo",
+  android: "monospace",
+  default: "monospace",
+}) ?? "monospace";
+const { width: screenWidth } = Dimensions.get("window");
 const scanlineRows = Array.from({ length: 24 }, (_, index) => index);
-const tileMap = Array.from({ length: TILES_PER_ROW * TILES_PER_COL }, (_, index) => {
-  const row = Math.floor(index / TILES_PER_ROW);
-  const col = index % TILES_PER_ROW;
-  const centerX = col - (TILES_PER_ROW - 1) / 2;
-  const centerY = row - (TILES_PER_COL - 1) / 2;
-  const distance = Math.sqrt(centerX * centerX + centerY * centerY);
-
-  return {
-    key: `${row}-${col}`,
-    row,
-    col,
-    delay: 1050 + distance * 120 + ((row + col) % 3) * 55,
-    driftX: centerX * 10 + (row % 2 === 0 ? 9 : -9),
-    driftY: centerY * 12 + (col % 2 === 0 ? -8 : 8),
-  };
-});
+const progressSegments = Array.from({ length: 18 }, (_, index) => index);
 
 export default function Start({ language, onComplete }: StartProps) {
   const shellReveal = useRef(new Animated.Value(0)).current;
-  const crtBoot = useRef(new Animated.Value(0)).current;
-  const logoFocus = useRef(new Animated.Value(0)).current;
-  const captionOpacity = useRef(new Animated.Value(0)).current;
-  const fadeToBlack = useRef(new Animated.Value(0)).current;
+  const progressValue = useRef(new Animated.Value(0)).current;
+  const cursorBlink = useRef(new Animated.Value(1)).current;
   const scanTravel = useRef(new Animated.Value(0)).current;
-  const flicker = useRef(new Animated.Value(0.22)).current;
-  const framePulse = useRef(new Animated.Value(0.4)).current;
+  const glowPulse = useRef(new Animated.Value(0.58)).current;
   const completedRef = useRef(false);
-  const tileProgress = useRef(tileMap.map(() => new Animated.Value(0))).current;
 
   const bootTitle = tr(language, "EDUFIKA RUNTIME", "EDUFIKA RUNTIME");
   const bootSubtitle = tr(
     language,
-    "Menghidupkan antarmuka ujian aman...",
-    "Bringing the secure exam interface online..."
+    "Menyiapkan pemeriksaan update dan boot sequence...",
+    "Preparing update checks and boot sequence..."
   );
-  const bootFooter = tr(language, "PHOSPHOR MATRIX ONLINE", "PHOSPHOR MATRIX ONLINE");
+  const bootFooter = tr(language, "terminal://startup", "terminal://startup");
 
   useEffect(() => {
-    const frameLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(framePulse, {
-          toValue: 1,
-          duration: 1300,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(framePulse, {
-          toValue: 0.4,
-          duration: 1600,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ])
-    );
+    Animated.parallel([
+      Animated.timing(shellReveal, {
+        toValue: 1,
+        duration: 420,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(progressValue, {
+        toValue: 1,
+        duration: 2300,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }),
+    ]).start();
 
-    const flickerLoop = Animated.loop(
+    const cursorLoop = Animated.loop(
       Animated.sequence([
-        Animated.timing(flicker, {
-          toValue: 0.08,
-          duration: 95,
-          easing: Easing.out(Easing.quad),
+        Animated.timing(cursorBlink, {
+          toValue: 0.18,
+          duration: 300,
+          easing: Easing.linear,
           useNativeDriver: true,
         }),
-        Animated.timing(flicker, {
-          toValue: 0.2,
-          duration: 110,
-          easing: Easing.out(Easing.quad),
+        Animated.timing(cursorBlink, {
+          toValue: 1,
+          duration: 260,
+          easing: Easing.linear,
           useNativeDriver: true,
         }),
-        Animated.timing(flicker, {
-          toValue: 0.12,
-          duration: 140,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.delay(260),
       ])
     );
 
@@ -108,7 +81,7 @@ export default function Start({ language, onComplete }: StartProps) {
       Animated.sequence([
         Animated.timing(scanTravel, {
           toValue: 1,
-          duration: 2400,
+          duration: 2200,
           easing: Easing.linear,
           useNativeDriver: true,
         }),
@@ -117,287 +90,116 @@ export default function Start({ language, onComplete }: StartProps) {
           duration: 0,
           useNativeDriver: true,
         }),
-        Animated.delay(180),
+        Animated.delay(100),
       ])
     );
 
-    frameLoop.start();
-    flickerLoop.start();
-    scanLoop.start();
-
-    const tileSequence = Animated.parallel(
-      tileProgress.map((value, index) =>
-        Animated.sequence([
-          Animated.delay(tileMap[index].delay),
-          Animated.timing(value, {
-            toValue: 1,
-            duration: 920,
-            easing: Easing.out(Easing.exp),
-            useNativeDriver: true,
-          }),
-        ])
-      ),
-      { stopTogether: false }
-    );
-
-    const mainSequence = Animated.sequence([
-      Animated.parallel([
-        Animated.timing(shellReveal, {
+    const glowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glowPulse, {
           toValue: 1,
-          duration: 900,
-          easing: Easing.out(Easing.cubic),
+          duration: 1200,
+          easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
-        Animated.sequence([
-          Animated.timing(crtBoot, {
-            toValue: 0.24,
-            duration: 240,
-            easing: Easing.out(Easing.quad),
-            useNativeDriver: true,
-          }),
-          Animated.timing(crtBoot, {
-            toValue: 1,
-            duration: 760,
-            easing: Easing.out(Easing.exp),
-            useNativeDriver: true,
-          }),
-        ]),
-      ]),
-      Animated.parallel([
-        tileSequence,
-        Animated.sequence([
-          Animated.delay(1200),
-          Animated.timing(logoFocus, {
-            toValue: 1,
-            duration: 3000,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }),
-        ]),
-        Animated.sequence([
-          Animated.delay(5400),
-          Animated.timing(captionOpacity, {
-            toValue: 1,
-            duration: 850,
-            easing: Easing.out(Easing.quad),
-            useNativeDriver: true,
-          }),
-        ]),
-      ]),
-    ]);
+        Animated.timing(glowPulse, {
+          toValue: 0.52,
+          duration: 1200,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
 
-    mainSequence.start();
+    cursorLoop.start();
+    scanLoop.start();
+    glowLoop.start();
 
-    const fadeTimer = setTimeout(() => {
-      Animated.timing(fadeToBlack, {
-        toValue: 1,
-        duration: 1250,
-        easing: Easing.inOut(Easing.cubic),
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished && !completedRef.current) {
-          completedRef.current = true;
-          onComplete();
-        }
-      });
-    }, 8750);
+    const completeTimer = setTimeout(() => {
+      if (!completedRef.current) {
+        completedRef.current = true;
+        onComplete();
+      }
+    }, 2500);
 
     return () => {
-      clearTimeout(fadeTimer);
-      frameLoop.stop();
-      flickerLoop.stop();
+      clearTimeout(completeTimer);
+      cursorLoop.stop();
       scanLoop.stop();
-      mainSequence.stop();
+      glowLoop.stop();
     };
-  }, [captionOpacity, crtBoot, fadeToBlack, flicker, framePulse, logoFocus, onComplete, scanTravel, shellReveal, tileProgress]);
+  }, [cursorBlink, glowPulse, onComplete, progressValue, scanTravel, shellReveal]);
 
   const shellScale = shellReveal.interpolate({
     inputRange: [0, 1],
-    outputRange: [0.965, 1],
+    outputRange: [0.97, 1],
   });
 
-  const crtScaleY = crtBoot.interpolate({
-    inputRange: [0, 0.2, 1],
-    outputRange: [0.03, 0.06, 1],
-  });
-
-  const crtScaleX = crtBoot.interpolate({
-    inputRange: [0, 0.2, 1],
-    outputRange: [0.16, 1.08, 1],
-  });
-
-  const crtOpacity = crtBoot.interpolate({
-    inputRange: [0, 0.15, 1],
-    outputRange: [0, 0.85, 1],
-  });
-
-  const clearLogoOpacity = logoFocus.interpolate({
-    inputRange: [0, 0.35, 1],
-    outputRange: [0, 0.28, 1],
-  });
-
-  const clearLogoScale = logoFocus.interpolate({
+  const progressWidth = progressValue.interpolate({
     inputRange: [0, 1],
-    outputRange: [1.18, 1],
+    outputRange: ["0%", "100%"],
   });
 
   const sweepTranslateY = scanTravel.interpolate({
     inputRange: [0, 1],
-    outputRange: [-crtHeight * 0.4, crtHeight * 0.5],
+    outputRange: [-170, 250],
   });
-
-  const frameGlow = framePulse.interpolate({
-    inputRange: [0.4, 1],
-    outputRange: [0.5, 0.95],
-  });
-
-  const tileNodes = useMemo(
-    () =>
-      tileMap.map((tile, index) => {
-        const progress = tileProgress[index];
-        return (
-          <Animated.View
-            key={tile.key}
-            style={[
-              styles.pixelTile,
-              {
-                left: tile.col * tileSize,
-                top: tile.row * tileSize,
-                width: tileSize,
-                height: tileSize,
-                opacity: progress.interpolate({
-                  inputRange: [0, 0.65, 1],
-                  outputRange: [0, 0.98, 0.14],
-                }),
-                transform: [
-                  {
-                    translateX: progress.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [tile.driftX, 0],
-                    }),
-                  },
-                  {
-                    translateY: progress.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [tile.driftY, 0],
-                    }),
-                  },
-                  {
-                    scale: progress.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [1.42, 1],
-                    }),
-                  },
-                ],
-              },
-            ]}
-          >
-            <Image
-              source={LOGO_SOURCE}
-              resizeMode="cover"
-              style={[
-                styles.pixelTileImage,
-                {
-                  width: logoFrameSize,
-                  height: logoFrameSize,
-                  transform: [{ translateX: -tile.col * tileSize }, { translateY: -tile.row * tileSize }],
-                },
-              ]}
-            />
-          </Animated.View>
-        );
-      }),
-    [tileProgress]
-  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <StatusBar barStyle="light-content" backgroundColor="#020604" />
       <View style={styles.root}>
-        <View style={styles.auraOne} pointerEvents="none" />
-        <View style={styles.auraTwo} pointerEvents="none" />
+        <View style={styles.glowOrbOne} pointerEvents="none" />
+        <View style={styles.glowOrbTwo} pointerEvents="none" />
+
         <Animated.View style={[styles.shell, { opacity: shellReveal, transform: [{ scale: shellScale }] }]}>
-          <View style={styles.shellHeader}>
-            <Text style={styles.shellLabel}>{bootTitle}</Text>
-            <Animated.View style={[styles.shellIndicator, { opacity: frameGlow }]} />
+          <View style={styles.headerRow}>
+            <Text style={styles.headerLabel}>BOOT</Text>
+            <Animated.View style={[styles.headerDot, { opacity: glowPulse }]} />
           </View>
 
-          <View style={styles.crtFrame}>
-            <Animated.View
-              style={[
-                styles.crtViewport,
-                {
-                  opacity: crtOpacity,
-                  transform: [{ scaleX: crtScaleX }, { scaleY: crtScaleY }],
-                },
-              ]}
-            >
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.crtFlash,
-                  {
-                    opacity: crtBoot.interpolate({
-                      inputRange: [0, 0.18, 0.65, 1],
-                      outputRange: [0.92, 0.48, 0.08, 0],
-                    }),
-                  },
-                ]}
-              />
+          <View style={styles.viewport}>
+            <Image source={LOGO_SOURCE} resizeMode="cover" style={styles.logo} />
 
-              <Animated.Image
-                source={LOGO_SOURCE}
-                resizeMode="cover"
-                style={[
-                  styles.logoImage,
-                  {
-                    width: logoFrameSize,
-                    height: logoFrameSize,
-                    opacity: clearLogoOpacity,
-                    transform: [{ scale: clearLogoScale }],
-                  },
-                ]}
-              />
+            <Text style={styles.titleText}>{bootTitle}</Text>
+            <View style={styles.subtitleRow}>
+              <Text style={styles.subtitleText}>{bootSubtitle}</Text>
+              <Animated.Text style={[styles.cursor, { opacity: cursorBlink }]}>_</Animated.Text>
+            </View>
 
-              <View style={[styles.pixelField, { width: logoFrameSize, height: logoFrameSize }]}>{tileNodes}</View>
+            <Text style={styles.footerLabel}>{bootFooter}</Text>
 
-              <View pointerEvents="none" style={styles.scanlineWrap}>
-                {scanlineRows.map((row) => (
-                  <View
-                    key={`scan-${row}`}
-                    style={[
-                      styles.scanline,
-                      {
-                        top: (crtHeight / scanlineRows.length) * row,
-                        opacity: row % 2 === 0 ? 0.12 : 0.05,
-                      },
-                    ]}
-                  />
+            <View style={styles.progressTrack}>
+              <Animated.View style={[styles.progressFill, { width: progressWidth }]} />
+              <View pointerEvents="none" style={styles.progressGrid}>
+                {progressSegments.map((segment) => (
+                  <View key={`segment-${segment}`} style={styles.progressDivider} />
                 ))}
               </View>
+            </View>
 
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.scanSweep,
-                  {
-                    transform: [{ translateY: sweepTranslateY }],
-                  },
-                ]}
-              />
+            <Text style={styles.progressText}>running preflight checks...</Text>
 
-              <Animated.View pointerEvents="none" style={[styles.noiseLayer, { opacity: flicker }]} />
-              <View pointerEvents="none" style={styles.vignette} />
-            </Animated.View>
+            <View pointerEvents="none" style={styles.scanlineWrap}>
+              {scanlineRows.map((row) => (
+                <View
+                  key={`scan-${row}`}
+                  style={[
+                    styles.scanline,
+                    {
+                      top: row * 12,
+                      opacity: row % 2 === 0 ? 0.1 : 0.04,
+                    },
+                  ]}
+                />
+              ))}
+            </View>
+            <Animated.View
+              pointerEvents="none"
+              style={[styles.scanSweep, { transform: [{ translateY: sweepTranslateY }] }]}
+            />
           </View>
-
-          <Animated.View style={[styles.captionWrap, { opacity: captionOpacity }]}>
-            <Text style={styles.captionText}>{bootSubtitle}</Text>
-            <Text style={styles.footerText}>{bootFooter}</Text>
-          </Animated.View>
         </Animated.View>
-
-        <Animated.View pointerEvents="none" style={[styles.fadeCurtain, { opacity: fadeToBlack }]} />
       </View>
     </SafeAreaView>
   );
@@ -406,121 +208,160 @@ export default function Start({ language, onComplete }: StartProps) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#eef2f6",
+    backgroundColor: "#020604",
   },
   root: {
     flex: 1,
-    backgroundColor: "#eef2f6",
+    backgroundColor: "#020604",
     justifyContent: "center",
     alignItems: "center",
-    overflow: "hidden",
     paddingHorizontal: 18,
+    overflow: "hidden",
   },
-  auraOne: {
+  glowOrbOne: {
     position: "absolute",
-    width: screenWidth * 0.82,
-    height: screenWidth * 0.82,
+    width: screenWidth * 0.76,
+    height: screenWidth * 0.76,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.82)",
-    top: screenHeight * 0.1,
-    left: -screenWidth * 0.12,
+    backgroundColor: "rgba(34,197,94,0.14)",
+    top: -screenWidth * 0.16,
+    left: -screenWidth * 0.14,
   },
-  auraTwo: {
+  glowOrbTwo: {
     position: "absolute",
-    width: screenWidth * 0.72,
-    height: screenWidth * 0.72,
+    width: screenWidth * 0.58,
+    height: screenWidth * 0.58,
     borderRadius: 999,
-    backgroundColor: "rgba(209,213,219,0.36)",
-    bottom: -screenWidth * 0.14,
-    right: -screenWidth * 0.1,
+    backgroundColor: "rgba(16,185,129,0.1)",
+    bottom: -screenWidth * 0.16,
+    right: -screenWidth * 0.08,
   },
   shell: {
     width: "100%",
     maxWidth: 392,
-    borderRadius: 36,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.94)",
-    backgroundColor: "rgba(255,255,255,0.56)",
-    padding: 18,
-    shadowColor: "#ffffff",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.78,
-    shadowRadius: 26,
-    elevation: 12,
   },
-  shellHeader: {
+  headerRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 14,
+    justifyContent: "space-between",
+    marginBottom: 12,
   },
-  shellLabel: {
-    color: "#eef2f7",
-    fontFamily: "Montserrat-Bold",
+  headerLabel: {
+    color: "#89f7a5",
+    fontFamily: MONO_FONT,
     fontSize: 12,
-    letterSpacing: 2.4,
-    textShadowColor: "rgba(255,255,255,0.72)",
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 12,
+    fontWeight: "700",
+    letterSpacing: 2,
   },
-  shellIndicator: {
+  headerDot: {
     width: 10,
     height: 10,
     borderRadius: 999,
-    backgroundColor: "#ffffff",
-    shadowColor: "#ffffff",
+    backgroundColor: "#3eff74",
+    shadowColor: "#3eff74",
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 1,
+    shadowRadius: 12,
+  },
+  viewport: {
+    minHeight: 420,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "rgba(62,255,116,0.3)",
+    backgroundColor: "#040b06",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 22,
+    paddingVertical: 30,
+    overflow: "hidden",
+    shadowColor: "#3eff74",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.24,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  logo: {
+    width: 136,
+    height: 136,
+    borderRadius: 26,
+    marginBottom: 22,
+    borderWidth: 1,
+    borderColor: "rgba(62,255,116,0.28)",
+  },
+  titleText: {
+    color: "#e4ffea",
+    fontFamily: MONO_FONT,
+    fontSize: 20,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  subtitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  subtitleText: {
+    color: "#8ce8a2",
+    fontFamily: MONO_FONT,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+    maxWidth: 280,
+  },
+  cursor: {
+    color: "#54ff83",
+    fontFamily: MONO_FONT,
+    fontSize: 16,
+    fontWeight: "700",
+    marginLeft: 4,
+  },
+  footerLabel: {
+    color: "#59de79",
+    fontFamily: MONO_FONT,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  progressTrack: {
+    width: "100%",
+    height: 16,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(62,255,116,0.28)",
+    backgroundColor: "#06110a",
+    overflow: "hidden",
+    marginBottom: 12,
+  },
+  progressFill: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: "#39ff73",
+    shadowColor: "#39ff73",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
     shadowRadius: 10,
   },
-  crtFrame: {
-    height: crtHeight,
-    borderRadius: 28,
-    padding: 10,
-    backgroundColor: "#e6eaef",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.88)",
-    shadowColor: "#ffffff",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.4,
-    shadowRadius: 18,
-  },
-  crtViewport: {
-    flex: 1,
-    borderRadius: 22,
-    backgroundColor: "#000000",
-    overflow: "hidden",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  crtFlash: {
+  progressGrid: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#f8fafc",
+    flexDirection: "row",
   },
-  logoImage: {
-    borderRadius: 34,
-    shadowColor: "#ffffff",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
+  progressDivider: {
+    flex: 1,
+    borderRightWidth: 1,
+    borderRightColor: "rgba(4,11,6,0.5)",
   },
-  pixelField: {
-    position: "absolute",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  pixelTile: {
-    position: "absolute",
-    overflow: "hidden",
-    borderRadius: 2,
-    borderWidth: 0.5,
-    borderColor: "rgba(255,255,255,0.22)",
-    backgroundColor: "#050505",
-  },
-  pixelTileImage: {
-    position: "absolute",
-    top: 0,
-    left: 0,
+  progressText: {
+    color: "#73d98c",
+    fontFamily: MONO_FONT,
+    fontSize: 11,
+    textAlign: "center",
   },
   scanlineWrap: {
     ...StyleSheet.absoluteFillObject,
@@ -530,49 +371,13 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 1,
-    backgroundColor: "rgba(255,255,255,0.65)",
+    backgroundColor: "rgba(130,255,166,0.28)",
   },
   scanSweep: {
     position: "absolute",
     left: 0,
     right: 0,
-    height: 110,
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  noiseLayer: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  vignette: {
-    ...StyleSheet.absoluteFillObject,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
-    shadowColor: "#000000",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 30,
-  },
-  captionWrap: {
-    marginTop: 14,
-    alignItems: "center",
-    gap: 5,
-  },
-  captionText: {
-    color: "#dbe2ea",
-    fontFamily: "Montserrat-Regular",
-    fontSize: 11,
-    letterSpacing: 0.7,
-    textAlign: "center",
-  },
-  footerText: {
-    color: "rgba(203,213,225,0.78)",
-    fontFamily: "Montserrat-Bold",
-    fontSize: 9,
-    letterSpacing: 2.1,
-    textAlign: "center",
-  },
-  fadeCurtain: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#000000",
+    height: 90,
+    backgroundColor: "rgba(72,255,124,0.08)",
   },
 });

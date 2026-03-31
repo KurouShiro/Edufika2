@@ -7,7 +7,10 @@ import com.facebook.react.uimanager.ViewManager
 
 class SecurityBridgePackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): MutableList<NativeModule> {
-        return mutableListOf(SecurityBridgeModule(reactContext))
+        return mutableListOf(
+            SecurityBridgeModule(reactContext),
+            UpdateBridgeModule(reactContext)
+        )
     }
 
     override fun createViewManagers(

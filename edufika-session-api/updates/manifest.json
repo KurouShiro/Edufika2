@@ -1,0 +1,31 @@
+{
+  "channel": "stable",
+  "generatedAt": "2026-03-31T06:07:38.955Z",
+  "remoteConfig": {
+    "version": "2026.03.31.0607",
+    "values": {
+      "defaultBackendBaseUrl": "https://srv1536310.hstgr.cloud",
+      "preferredThemeId": "matrix",
+      "statusBanner": "Edufika secure runtime online.",
+      "allowManualThemeSelection": true,
+      "allowDeveloperAccess": true
+    }
+  },
+  "ota": {
+    "version": "2026.03.31-0607-stable",
+    "mandatory": false,
+    "minNativeVersionCode": 10003,
+    "bundleUrl": "/updates/files/ota/edufika-rn-stable-update.zip",
+    "sha256": "99adab7c21375cb0425385e23aa5c7009bedb3be8389b0c73359424642d9232b",
+    "notes": "React Native OTA package for the stable channel."
+  },
+  "native": {
+    "versionCode": 10003,
+    "versionName": "1.0.3",
+    "mandatory": false,
+    "apkUrl": "/updates/files/native/app-release.apk",
+    "packageName": "com.techivibes.edufika",
+    "sha256": "7fd29f0a5d43acb3d1190175535646210cf10598c3d42f24b35ee0db84ee6f28",
+    "notes": "Native APK package for the stable channel."
+  }
+}

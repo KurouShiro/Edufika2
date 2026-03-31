@@ -11,6 +11,7 @@ import { createExamRouter } from "./routes/exam";
 import { createQuizRouter } from "./routes/quiz";
 import { createSessionRouter } from "./routes/session";
 import { createStudentRouter } from "./routes/student";
+import { createUpdateRouter, ensureUpdateAssetDirectory } from "./routes/update";
 import { ApiError, SessionService } from "./services/sessionService";
 import { WsHub } from "./services/wsHub";
 import { httpsOnlyMiddleware } from "./middleware/httpsOnly";
@@ -43,7 +44,10 @@ apiRouter.use("/student", createStudentRouter(sessionService));
 apiRouter.use("/admin", createAdminRouter(sessionService));
 apiRouter.use("/exam", createExamRouter(sessionService));
 apiRouter.use("/quiz", createQuizRouter(sessionService));
+apiRouter.use("/updates", createUpdateRouter());
 
+void ensureUpdateAssetDirectory();
+app.use("/updates/files", express.static(config.updateAssetsDir, { fallthrough: true, index: false }));
 app.use(apiRouter);
 app.use("/api", apiRouter);
 

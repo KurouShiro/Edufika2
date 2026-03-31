@@ -554,7 +554,7 @@ class SessionClient(private val context: Context) {
     }
 
     private fun normalizeBaseUrl(rawValue: String): String {
-        val normalized = TestUtils.normalizeUrl(rawValue).trimEnd('/')
+        val normalized = TestUtils.migrateBackendBaseUrl(rawValue)
         val baseUrl = if (normalized.isBlank()) {
             TestConstants.SERVER_BASE_URL
         } else {

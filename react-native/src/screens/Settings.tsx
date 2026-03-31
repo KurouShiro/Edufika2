@@ -6,16 +6,26 @@ import Layout, { ThemeId, TerminalButton, palette, themePresets } from "./Layout
 type SettingsScreenProps = {
   language: AppLanguage;
   themeId: ThemeId;
+  allowManualThemeSelection?: boolean;
+  appVersionLabel: string;
+  updateSummary: string;
+  statusBanner?: string;
   onSelectLanguage: (language: AppLanguage) => void;
   onSelectTheme: (themeId: ThemeId) => void;
+  onOpenUpdater: () => void;
   onBack: () => void;
 };
 
 export default function Settings({
   language,
   themeId,
+  allowManualThemeSelection = true,
+  appVersionLabel,
+  updateSummary,
+  statusBanner,
   onSelectLanguage,
   onSelectTheme,
+  onOpenUpdater,
   onBack,
 }: SettingsScreenProps) {
   return (
@@ -41,6 +51,17 @@ export default function Settings({
 
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>{tr(language, "Theme", "Theme").toUpperCase()}</Text>
+        {!allowManualThemeSelection ? (
+          <View style={styles.lockedThemeNote}>
+            <Text style={styles.lockedThemeText}>
+              {tr(
+                language,
+                "Tema dikendalikan oleh remote config server.",
+                "Theme is currently controlled by the remote config server."
+              )}
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.themeGrid}>
           {themePresets.map((preset) => {
             const active = preset.id === themeId;
@@ -49,8 +70,10 @@ export default function Settings({
               <Pressable
                 key={preset.id}
                 onPress={() => onSelectTheme(preset.id)}
+                disabled={!allowManualThemeSelection}
                 style={[
                   styles.themeCard,
+                  !allowManualThemeSelection ? styles.themeCardDisabled : null,
                   active
                     ? {
                         borderColor: palette.neon,
@@ -68,6 +91,14 @@ export default function Settings({
             );
           })}
         </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>{tr(language, "Updates", "Updates").toUpperCase()}</Text>
+        <Text style={styles.metaText}>{tr(language, "Versi Aplikasi", "App Version")}: {appVersionLabel}</Text>
+        <Text style={styles.noteText}>{updateSummary}</Text>
+        {statusBanner ? <Text style={styles.bannerText}>{statusBanner}</Text> : null}
+        <TerminalButton label={tr(language, "Periksa Update", "Check Updates")} onPress={onOpenUpdater} />
       </View>
 
       <View style={styles.note}>
@@ -126,6 +157,9 @@ const styles = StyleSheet.create({
     padding: 8,
     backgroundColor: "#ffffff",
   },
+  themeCardDisabled: {
+    opacity: 0.5,
+  },
   gradientPreview: {
     height: 28,
     borderRadius: 10,
@@ -178,6 +212,33 @@ const styles = StyleSheet.create({
   },
   noteText: {
     color: "#9ca3af",
+    fontFamily: "Montserrat-Regular",
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  metaText: {
+    color: "#4b5563",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 10,
+    marginBottom: 6,
+  },
+  bannerText: {
+    color: "#166534",
+    fontFamily: "Montserrat-Regular",
+    fontSize: 10,
+    lineHeight: 15,
+    marginBottom: 10,
+  },
+  lockedThemeNote: {
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 14,
+    backgroundColor: "#f8fafc",
+    padding: 8,
+    marginBottom: 8,
+  },
+  lockedThemeText: {
+    color: "#6b7280",
     fontFamily: "Montserrat-Regular",
     fontSize: 10,
     lineHeight: 15,

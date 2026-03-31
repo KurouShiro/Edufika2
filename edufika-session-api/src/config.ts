@@ -1,3 +1,5 @@
+import path from "node:path";
+
 function parseIntEnv(name: string, fallback: number): number {
   const value = process.env[name];
   if (!value) return fallback;
@@ -14,6 +16,7 @@ function requireEnv(name: string): string {
 }
 
 export const config = {
+  projectRoot: process.cwd(),
   port: parseIntEnv("PORT", 8088),
   host: process.env.HOST || "0.0.0.0",
   jwtSecret: requireEnv("JWT_SECRET"),
@@ -53,4 +56,15 @@ export const config = {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean),
+  defaultUpdateChannel: process.env.UPDATE_DEFAULT_CHANNEL?.trim() || "stable",
+  publicBaseUrl: process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "") || "",
+  updateManifestsDir:
+    process.env.UPDATE_MANIFESTS_DIR?.trim() ||
+    path.join(process.cwd(), "updates"),
+  updateManifestPath:
+    process.env.UPDATE_MANIFEST_PATH?.trim() ||
+    path.join(process.cwd(), "updates", "manifest.json"),
+  updateAssetsDir:
+    process.env.UPDATE_ASSETS_DIR?.trim() ||
+    path.join(process.cwd(), "updates", "files"),
 };

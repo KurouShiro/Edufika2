@@ -11,6 +11,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package*.json ./
 COPY tsconfig.json ./
 COPY src ./src
+COPY updates ./updates
 
 RUN npm run build
 RUN mkdir -p /app/dist/db/migrations/mysql \
@@ -26,6 +27,7 @@ ENV PORT=8091
 
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/dist ./dist
+COPY --chown=node:node --from=build /app/updates ./updates
 COPY --chown=node:node package*.json ./
 
 EXPOSE 8091

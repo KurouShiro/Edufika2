@@ -12,6 +12,7 @@ import com.facebook.react.soloader.OpenSourceMergedSoMapping
 import com.facebook.soloader.SoLoader
 import com.techivibes.edufika.data.SessionStateStore
 import com.techivibes.edufika.rn.SecurityBridgePackage
+import com.techivibes.edufika.updates.AppUpdateStore
 
 class EdufikaApplication : Application(), ReactApplication {
 
@@ -22,6 +23,10 @@ class EdufikaApplication : Application(), ReactApplication {
             }
 
             override fun getJSMainModuleName(): String = "index"
+
+            override fun getJSBundleFile(): String? {
+                return AppUpdateStore.prepareBundleForLaunch(applicationContext)?.absolutePath
+            }
 
             // Use embedded bundle when available, fallback to Metro in debug if bundle is missing.
             override fun getUseDeveloperSupport(): Boolean {
@@ -43,6 +48,7 @@ class EdufikaApplication : Application(), ReactApplication {
     override fun onCreate() {
         super.onCreate()
         SessionStateStore.bind(this)
+        SessionStateStore.restore()
         SoLoader.init(this, OpenSourceMergedSoMapping)
         if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
             DefaultNewArchitectureEntryPoint.load()

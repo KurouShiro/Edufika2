@@ -117,6 +117,7 @@ android {
             isShrinkResources = false
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             buildConfigField("boolean", "DEV_TOOLS_ENABLED", "true")
+            buildConfigField("String", "UPDATE_CHANNEL", "\"debug\"")
         }
         release {
             isMinifyEnabled = true
@@ -126,6 +127,7 @@ android {
             }
             manifestPlaceholders["usesCleartextTraffic"] = "false"
             buildConfigField("boolean", "DEV_TOOLS_ENABLED", "false")
+            buildConfigField("String", "UPDATE_CHANNEL", "\"stable\"")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
