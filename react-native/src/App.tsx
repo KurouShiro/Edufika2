@@ -6,6 +6,8 @@ import type {
   AdminGeneratedTokenItem,
   AdminTokenMonitorDetail,
   AdminTokenMonitorItem,
+  TokenActivityLogItem,
+  TokenActivityState,
 } from "./screens/AdminDashboardPanel";
 import DeveloperAccessScreen from "./screens/DeveloperAccessScreen";
 import ExamSelectionScreen from "./screens/ExamSelectionScreen";
@@ -114,15 +116,37 @@ type BackendMonitorToken = {
   token: string;
   role?: "student" | "admin" | string | null;
   status?: IssuedTokenStatus | string | null;
+  bindingId?: string | null;
+  binding_id?: string | null;
   ipAddress?: string | null;
   deviceName?: string | null;
+  claimedAt?: string | null;
+  claimed_at?: string | null;
   expiresAt?: string | null;
   lastSeenAt?: string | null;
+  lockReason?: string | null;
+  lock_reason?: string | null;
+  sessionState?: string | null;
+  session_state?: string | null;
+  activityState?: TokenActivityState | string | null;
+  activity_state?: TokenActivityState | string | null;
+  launchUrl?: string | null;
+  launch_url?: string | null;
+  staleSeconds?: number | string | null;
+  stale_seconds?: number | string | null;
+  latestViolationType?: string | null;
+  latest_violation_type?: string | null;
+  latestViolationDetail?: string | null;
+  latest_violation_detail?: string | null;
+  latestViolationAt?: string | null;
+  latest_violation_at?: string | null;
   ip_address?: string | null;
   device_name?: string | null;
   expires_at?: string | null;
   last_seen_at?: string | null;
 };
+
+type TokenActivityLogMap = Record<string, TokenActivityLogItem[]>;
 
 type BackendQuizResultRow = {
   token?: string | null;
@@ -231,8 +255,9 @@ const ADMIN_TOKEN = "AdminID";
 const DEVELOPER_PASSWORD = "EDU_DEV_ACCESS";
 const DEFAULT_SESSION_EXPIRY_MINUTES = 120;
 const BACKEND_ADMIN_CREATE_KEY = "ed9314856e2e74de0965f657da218b5531988e483f786bd377a68e41cc79cd02ba41b9f47d63c6b50f3c3fc6743010d15090d4bf98c1112a47e6271d449987fa";
-const ADMIN_MONITOR_REFRESH_INTERVAL_MS = 1200;
+const ADMIN_MONITOR_REFRESH_INTERVAL_MS = 200;
 const ADMIN_MONITOR_RETRY_INTERVAL_MS = 2500;
+const ADMIN_MONITOR_QUIZ_RESULTS_REFRESH_INTERVAL_MS = 5000;
 const ADMIN_WORKSPACE_SCHEMA_VERSION = 2;
 
 const DEFAULT_QUIZ_BUILDER_CACHE: QuizQuestionBuilderCache = {
@@ -935,6 +960,50 @@ function formatIsoLabel(value?: string | null): string {
   return formatTimestamp(parsed);
 }
 
+function formatTokenActivitySummary(
+  activityState: TokenActivityState,
+  status: IssuedTokenStatus,
+  sessionState: string,
+  staleSeconds: number | null,
+  lockReason: string
+): string {
+  switch (activityState) {
+    case "on_exam_screen":
+      return "Student is active on the exam screen.";
+    case "disconnected":
+      return staleSeconds && staleSeconds > 0
+        ? `Student disconnected. Heartbeat stale for ${staleSeconds}s.`
+        : "Student disconnected from the exam session.";
+    case "paused":
+      return `Session paused by proctor (${sessionState}).`;
+    case "revoked":
+      return lockReason ? `Token locked: ${lockReason}.` : "Token has been locked or revoked.";
+    case "expired":
+      return "Token has expired.";
+    case "waiting_claim":
+    default:
+      return status === "issued"
+        ? "Waiting for student claim."
+        : "Token is waiting for the next student claim.";
+  }
+}
+
+function buildTokenActivityLogEntry(
+  token: string,
+  message: string,
+  tone: TokenActivityLogItem["tone"],
+  extra?: Partial<Omit<TokenActivityLogItem, "id" | "token" | "timestampLabel" | "message" | "tone">>
+): TokenActivityLogItem {
+  return {
+    id: `${token}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    token,
+    timestampLabel: formatTimestamp(Date.now()),
+    message,
+    tone,
+    ...extra,
+  };
+}
+
 function formatRemainingDuration(millis: number): string {
   const clamped = Math.max(0, millis);
   const totalSeconds = Math.floor(clamped / 1000);
@@ -1083,6 +1152,11 @@ export default function App() {
   const [revokeTokenStatus, setRevokeTokenStatus] = useState(
     tr("id", "Masukkan token siswa untuk revoke.", "Enter a student token to revoke.")
   );
+  const [reactivateTokenInput, setReactivateTokenInput] = useState("");
+  const [reactivateTokenStatus, setReactivateTokenStatus] = useState(
+    tr("id", "Masukkan token siswa untuk reaktivasi.", "Enter a student token to reactivate.")
+  );
+  const [reactivateTokenPending, setReactivateTokenPending] = useState(false);
   const [sessionControlStatus, setSessionControlStatus] = useState(
     tr("id", "Kontrol sesi siap.", "Session control ready.")
   );
@@ -1157,11 +1231,14 @@ export default function App() {
   const [studentTokenAdminContexts, setStudentTokenAdminContexts] = useState<Record<string, StudentTokenAdminContext>>({});
   const [backendMonitorItems, setBackendMonitorItems] = useState<AdminTokenMonitorItem[]>([]);
   const [quizResultsByToken, setQuizResultsByToken] = useState<Record<string, QuizResultByToken>>({});
+  const [tokenActivityLogsByToken, setTokenActivityLogsByToken] = useState<TokenActivityLogMap>({});
   const [selectedMonitorToken, setSelectedMonitorToken] = useState("");
   const [backendMonitorError, setBackendMonitorError] = useState("");
   const [adminDashboardTab, setAdminDashboardTab] = useState<"monitor" | "tokens" | "logs">("monitor");
   const multiWindowWatchLoggedRef = useRef(false);
   const adminMonitorFetchInFlightRef = useRef(false);
+  const adminMonitorLastQuizRefreshAtRef = useRef(0);
+  const tokenMonitorSnapshotRef = useRef<Record<string, AdminTokenMonitorItem>>({});
   const adminWorkspaceHydratedRef = useRef(false);
   const adminWorkspaceCacheRef = useRef<AdminWorkspaceCache>({
     version: ADMIN_WORKSPACE_SCHEMA_VERSION,
@@ -1296,9 +1373,16 @@ export default function App() {
   const resetAdminWorkspaceState = (options?: { preserveBackendSession?: boolean }) => {
     applyAdminWorkspaceEntry(buildDefaultAdminWorkspaceEntry(), options);
     setBackendMonitorError("");
+    setTokenActivityLogsByToken({});
+    adminMonitorLastQuizRefreshAtRef.current = 0;
+    tokenMonitorSnapshotRef.current = {};
     setRevokeTokenInput("");
     setRevokeTokenStatus(
       tr(language, "Masukkan token siswa untuk revoke.", "Enter a student token to revoke.")
+    );
+    setReactivateTokenInput("");
+    setReactivateTokenStatus(
+      tr(language, "Masukkan token siswa untuk reaktivasi.", "Enter a student token to reactivate.")
     );
     setSessionControlStatus(tr(language, "Kontrol sesi siap.", "Session control ready."));
   };
@@ -1951,7 +2035,10 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (screen !== "AdminDashboardPanel" || adminDashboardTab !== "monitor") {
+    if (
+      screen !== "AdminDashboardPanel" ||
+      (adminDashboardTab !== "monitor" && adminDashboardTab !== "logs")
+    ) {
       return undefined;
     }
     if (!adminBackendSessionId || !adminBackendAccessSignature) {
@@ -2008,6 +2095,154 @@ export default function App() {
   const addLog = useCallback((message: string) => {
     setLogs((prev) => [makeLogLine(message), ...prev].slice(0, 120));
   }, []);
+
+  const appendTokenActivityLog = useCallback(
+    (
+      token: string,
+      message: string,
+      tone: TokenActivityLogItem["tone"],
+      extra?: Partial<Omit<TokenActivityLogItem, "id" | "token" | "timestampLabel" | "message" | "tone">>
+    ) => {
+      const normalizedToken = token.trim().toUpperCase();
+      if (!normalizedToken || !message.trim()) {
+        return;
+      }
+      setTokenActivityLogsByToken((prev) => ({
+        ...prev,
+        [normalizedToken]: [
+          buildTokenActivityLogEntry(normalizedToken, message, tone, extra),
+          ...(prev[normalizedToken] ?? []),
+        ].slice(0, 60),
+      }));
+    },
+    []
+  );
+
+  const recordTokenMonitorSnapshot = useCallback(
+    (items: AdminTokenMonitorItem[]) => {
+      const previousMap = tokenMonitorSnapshotRef.current;
+      const nextMap: Record<string, AdminTokenMonitorItem> = {};
+
+      items.forEach((item) => {
+        const tokenKey = item.token.trim().toUpperCase();
+        if (!tokenKey) {
+          return;
+        }
+
+        nextMap[tokenKey] = item;
+        const previous = previousMap[tokenKey];
+
+        const statusMessage =
+          item.status === "online"
+            ? previous
+              ? tr(language, "Siswa kembali aktif di layar ujian.", "Student is active on the exam screen again.")
+              : tr(language, "Siswa aktif di layar ujian.", "Student is active on the exam screen.")
+            : item.status === "offline"
+              ? previous
+                ? tr(
+                    language,
+                    "Siswa terputus dari sesi aktif atau meninggalkan layar ujian.",
+                    "Student disconnected from the active session or left the exam screen."
+                  )
+                : tr(
+                    language,
+                    "Siswa sedang terputus dari sesi aktif.",
+                    "Student is currently disconnected from the active exam session."
+                  )
+              : item.status === "revoked"
+                ? tr(
+                    language,
+                    `Token dikunci${item.lockReason ? `: ${item.lockReason}` : "."}`,
+                    `Token was locked${item.lockReason ? `: ${item.lockReason}` : "."}`
+                  )
+                : item.status === "expired"
+                  ? tr(language, "Token telah kadaluarsa.", "Token has expired.")
+                  : previous
+                    ? tr(
+                        language,
+                        "Token siap diklaim ulang oleh siswa.",
+                        "Token is ready to be claimed again by a student."
+                      )
+                    : tr(language, "Token menunggu klaim siswa.", "Token is waiting for a student claim.");
+
+        if (!previous) {
+          appendTokenActivityLog(tokenKey, statusMessage, item.status === "revoked" ? "danger" : "neutral", {
+            activityState: item.activityState,
+            violationType: item.latestViolationType || undefined,
+            examWebsite: item.launchUrl || undefined,
+          });
+        } else if (
+          previous.status !== item.status ||
+          previous.activityState !== item.activityState ||
+          previous.sessionState !== item.sessionState
+        ) {
+          appendTokenActivityLog(
+            tokenKey,
+            statusMessage,
+            item.status === "revoked"
+              ? "danger"
+              : item.status === "offline"
+                ? "warning"
+                : item.status === "online"
+                  ? "success"
+                  : "neutral",
+            {
+              activityState: item.activityState,
+              violationType: item.latestViolationType || undefined,
+              examWebsite: item.launchUrl || undefined,
+            }
+          );
+        }
+
+        const previousViolationSignature = previous
+          ? [previous.latestViolationType, previous.latestViolationAtLabel, previous.latestViolationDetail].join("|")
+          : "";
+        const currentViolationSignature = [
+          item.latestViolationType,
+          item.latestViolationAtLabel,
+          item.latestViolationDetail,
+        ].join("|");
+        if (
+          item.latestViolationType &&
+          currentViolationSignature !== previousViolationSignature
+        ) {
+          appendTokenActivityLog(
+            tokenKey,
+            tr(
+              language,
+              `Pelanggaran terdeteksi: ${item.latestViolationType}${item.latestViolationDetail ? ` (${item.latestViolationDetail})` : ""}`,
+              `Violation detected: ${item.latestViolationType}${item.latestViolationDetail ? ` (${item.latestViolationDetail})` : ""}`
+            ),
+            "warning",
+            {
+              activityState: item.activityState,
+              violationType: item.latestViolationType,
+              examWebsite: item.launchUrl || undefined,
+            }
+          );
+        }
+
+        if (item.launchUrl && item.launchUrl !== previous?.launchUrl) {
+          appendTokenActivityLog(
+            tokenKey,
+            tr(
+              language,
+              `Website ujian aktif: ${item.launchUrl}`,
+              `Active exam website: ${item.launchUrl}`
+            ),
+            "success",
+            {
+              activityState: item.activityState,
+              examWebsite: item.launchUrl,
+            }
+          );
+        }
+      });
+
+      tokenMonitorSnapshotRef.current = nextMap;
+    },
+    [appendTokenActivityLog, language]
+  );
 
   const recordViolation = useCallback(
     (detail: string, riskDelta: number, source: "risk" | "native_lock") => {
@@ -2327,17 +2562,67 @@ export default function App() {
               ? rawStatus
               : "issued";
           const roleRaw = String(entry.role ?? "student").toLowerCase();
+          const sessionState = String(entry.sessionState ?? entry.session_state ?? "IN_PROGRESS")
+            .trim()
+            .toUpperCase();
+          const rawActivityState = String(entry.activityState ?? entry.activity_state ?? "")
+            .trim()
+            .toLowerCase();
+          const activityState: TokenActivityState =
+            rawActivityState === "on_exam_screen" ||
+            rawActivityState === "disconnected" ||
+            rawActivityState === "revoked" ||
+            rawActivityState === "expired" ||
+            rawActivityState === "paused"
+              ? rawActivityState
+              : "waiting_claim";
+          const lockReason = String(entry.lockReason ?? entry.lock_reason ?? "").trim();
+          const launchUrl = String(entry.launchUrl ?? entry.launch_url ?? "").trim();
+          const latestViolationType = String(
+            entry.latestViolationType ?? entry.latest_violation_type ?? ""
+          )
+            .trim()
+            .toUpperCase();
+          const latestViolationDetail = String(
+            entry.latestViolationDetail ?? entry.latest_violation_detail ?? ""
+          ).trim();
+          const latestViolationAt = String(
+            entry.latestViolationAt ?? entry.latest_violation_at ?? ""
+          ).trim();
+          const lastSeenRaw = String(entry.lastSeenAt ?? entry.last_seen_at ?? "").trim();
+          const lastSeenAtMs = lastSeenRaw ? Date.parse(lastSeenRaw) : Number.NaN;
+          const staleSecondsValue = Number(
+            entry.staleSeconds ?? entry.stale_seconds ?? (Number.isFinite(lastSeenAtMs) ? Math.max(0, Math.floor((Date.now() - lastSeenAtMs) / 1000)) : 0)
+          );
           return {
             token: tokenValue,
             role: roleRaw === "admin" ? "admin" : "student",
             status: normalizedStatus,
+            bindingId: String(entry.bindingId ?? entry.binding_id ?? "").trim(),
             ipAddress: entry.ipAddress ?? entry.ip_address ?? "-",
             deviceName:
               entry.deviceName ??
               entry.device_name ??
               tr(language, "Belum terdaftar", "Not registered yet"),
+            sessionState,
+            activityState,
+            activitySummary: formatTokenActivitySummary(
+              activityState,
+              normalizedStatus,
+              sessionState,
+              Number.isFinite(staleSecondsValue) ? staleSecondsValue : null,
+              lockReason
+            ),
+            launchUrl,
+            lockReason,
+            latestViolationType,
+            latestViolationDetail,
+            latestViolationAtLabel: formatIsoLabel(latestViolationAt || null),
+            claimedAtLabel: formatIsoLabel(entry.claimedAt ?? entry.claimed_at ?? null),
             expiresAtLabel: formatIsoLabel(entry.expiresAt ?? entry.expires_at),
-            lastSeenLabel: formatIsoLabel(entry.lastSeenAt ?? entry.last_seen_at),
+            lastSeenLabel: formatIsoLabel(lastSeenRaw || null),
+            lastSeenAtMs: Number.isFinite(lastSeenAtMs) ? lastSeenAtMs : null,
+            staleSeconds: Number.isFinite(staleSecondsValue) ? staleSecondsValue : null,
           };
         })
         .filter((entry): entry is AdminTokenMonitorItem => entry !== null);
@@ -2417,7 +2702,12 @@ export default function App() {
       context: StudentTokenAdminContext
     ): Promise<{ monitorItems: AdminTokenMonitorItem[]; quizResultsMap: Record<string, QuizResultByToken> }> => {
       const monitorItems = await fetchMonitorPayload(context);
-      const quizResultsMap = await fetchQuizResultsPayload(context);
+      let quizResultsMap = quizResultsByToken;
+      const now = Date.now();
+      if (now - adminMonitorLastQuizRefreshAtRef.current >= ADMIN_MONITOR_QUIZ_RESULTS_REFRESH_INTERVAL_MS) {
+        quizResultsMap = await fetchQuizResultsPayload(context);
+        adminMonitorLastQuizRefreshAtRef.current = now;
+      }
       return { monitorItems, quizResultsMap };
     };
 
@@ -3765,15 +4055,47 @@ export default function App() {
 
   const localTokenMonitorItems: AdminTokenMonitorItem[] = [...issuedTokens]
     .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
-    .map((entry) => ({
-      token: entry.token,
-      role: entry.role,
-      status: resolveIssuedTokenStatus(entry),
-      ipAddress: entry.ipAddress || "-",
-      deviceName: entry.deviceName || tr(language, "Belum terdaftar", "Not registered yet"),
-      expiresAtLabel: formatTimestamp(entry.expiresAt),
-      lastSeenLabel: formatTimestamp(entry.lastSeenAt),
-    }));
+    .map((entry) => {
+      const status = resolveIssuedTokenStatus(entry);
+      const activityState: TokenActivityState =
+        status === "online"
+          ? "on_exam_screen"
+          : status === "offline"
+            ? "disconnected"
+            : status === "revoked"
+              ? "revoked"
+              : status === "expired"
+                ? "expired"
+                : "waiting_claim";
+      const tokenLaunchUrl = getTokenLaunchUrl(tokenLaunchPolicies, entry.token) ?? "";
+      return {
+        token: entry.token,
+        role: entry.role,
+        status,
+        bindingId: "",
+        ipAddress: entry.ipAddress || "-",
+        deviceName: entry.deviceName || tr(language, "Belum terdaftar", "Not registered yet"),
+        sessionState: status === "offline" ? "DEGRADED" : "IN_PROGRESS",
+        activityState,
+        activitySummary: formatTokenActivitySummary(
+          activityState,
+          status,
+          status === "offline" ? "DEGRADED" : "IN_PROGRESS",
+          Math.max(0, Math.floor((Date.now() - entry.lastSeenAt) / 1000)),
+          entry.revokedReason ?? ""
+        ),
+        launchUrl: tokenLaunchUrl,
+        lockReason: entry.revokedReason ?? "",
+        latestViolationType: "",
+        latestViolationDetail: "",
+        latestViolationAtLabel: "-",
+        claimedAtLabel: "-",
+        expiresAtLabel: formatTimestamp(entry.expiresAt),
+        lastSeenLabel: formatTimestamp(entry.lastSeenAt),
+        lastSeenAtMs: entry.lastSeenAt,
+        staleSeconds: Math.max(0, Math.floor((Date.now() - entry.lastSeenAt) / 1000)),
+      };
+    });
   const hasBackendMonitorContext = Boolean(adminBackendSessionId && adminBackendAccessSignature);
   const tokenMonitorItems: AdminTokenMonitorItem[] = hasBackendMonitorContext
     ? (() => {
@@ -3815,7 +4137,7 @@ export default function App() {
     ? getTokenPinPolicy(tokenPinPolicies, selectedMonitorItem.token)
     : undefined;
   const selectedMonitorLaunchUrl = selectedMonitorItem
-    ? getTokenLaunchUrl(tokenLaunchPolicies, selectedMonitorItem.token) ?? ""
+    ? getTokenLaunchUrl(tokenLaunchPolicies, selectedMonitorItem.token) ?? selectedMonitorItem.launchUrl
     : "";
   const selectedMonitorLaunchPolicyUpdatedAt = selectedMonitorItem
     ? getTokenLaunchPolicyLabel(tokenLaunchPolicies, selectedMonitorItem.token)
@@ -3830,8 +4152,18 @@ export default function App() {
         status: selectedMonitorItem.status,
         ipAddress: selectedMonitorItem.ipAddress,
         deviceName: selectedMonitorItem.deviceName,
+        bindingId: selectedMonitorItem.bindingId,
+        sessionState: selectedMonitorItem.sessionState,
+        activityState: selectedMonitorItem.activityState,
+        activitySummary: selectedMonitorItem.activitySummary,
+        latestViolationType: selectedMonitorItem.latestViolationType,
+        latestViolationDetail: selectedMonitorItem.latestViolationDetail,
+        latestViolationAtLabel: selectedMonitorItem.latestViolationAtLabel,
+        lockReason: selectedMonitorItem.lockReason,
         expiresAtLabel: selectedMonitorItem.expiresAtLabel,
         lastSeenLabel: selectedMonitorItem.lastSeenLabel,
+        lastSeenAtMs: selectedMonitorItem.lastSeenAtMs,
+        staleSeconds: selectedMonitorItem.staleSeconds,
         proctorPin: selectedMonitorPinPolicy?.pin ?? "",
         pinEffectiveDate: selectedMonitorPinPolicy?.effectiveDate ?? "",
         launchUrl: selectedMonitorLaunchUrl,
@@ -3839,6 +4171,14 @@ export default function App() {
         quizResult: selectedMonitorQuizResult,
       }
     : null;
+
+  useEffect(() => {
+    if (screen !== "AdminDashboardPanel") {
+      return;
+    }
+    recordTokenMonitorSnapshot(tokenMonitorItems);
+  }, [recordTokenMonitorSnapshot, screen, tokenMonitorItems]);
+
   const updateTargetVersionLabel =
     updateProgressState.versionLabel ||
     updateSnapshot?.ota.version ||
@@ -4339,6 +4679,10 @@ export default function App() {
         selectedMonitorToken={selectedMonitorToken}
         selectedMonitorDetail={selectedMonitorDetail}
         logs={logs}
+        tokenActivityLogsByToken={tokenActivityLogsByToken}
+        reactivateTokenInput={reactivateTokenInput}
+        reactivateTokenStatus={reactivateTokenStatus}
+        reactivateTokenPending={reactivateTokenPending}
         onTabChange={setAdminDashboardTab}
         onSelectMonitorToken={(token: string) => {
           const normalized = token.trim().toUpperCase();
@@ -4547,6 +4891,7 @@ export default function App() {
           );
         }}
         onRevokeTokenInputChange={setRevokeTokenInput}
+        onReactivateTokenInputChange={setReactivateTokenInput}
         onRevokeStudentToken={async () => {
           const targetToken = revokeTokenInput.trim().toUpperCase();
           if (!targetToken) {
@@ -4674,6 +5019,94 @@ export default function App() {
             setViolationReason(reason);
             setStatusMessage(reason);
             setScreen("ViolationScreen");
+          }
+        }}
+        onReactivateStudentToken={async () => {
+          const targetToken = reactivateTokenInput.trim().toUpperCase();
+          if (!targetToken) {
+            const message = tr(language, "Isi token siswa terlebih dahulu.", "Provide a student token first.");
+            setReactivateTokenStatus(message);
+            addLog("Student reactivation rejected: empty token input.");
+            return;
+          }
+
+          const base = normalizeBackendBaseUrl(backendBaseUrl);
+          if (!base || !adminBackendSessionId || !adminBackendAccessSignature) {
+            const message = tr(
+              language,
+              "Sesi admin backend belum aktif. Generate token admin terlebih dahulu.",
+              "Backend admin session is not active yet. Generate an admin token first."
+            );
+            setReactivateTokenStatus(message);
+            addLog(`Student reactivation failed: backend admin session missing (${targetToken}).`);
+            return;
+          }
+
+          setReactivateTokenPending(true);
+          try {
+            const response = await fetch(`${base}/admin/reactivate-student`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                session_id: adminBackendSessionId,
+                access_signature: adminBackendAccessSignature,
+                student_token: targetToken,
+              }),
+            });
+            const payload = await parseJsonResponse(response);
+            const nextExpiryAt = typeof payload.expires_at === "string" ? Date.parse(payload.expires_at) : Number.NaN;
+
+            setIssuedTokens((prev) =>
+              prev.map((entry) =>
+                entry.token.toUpperCase() === targetToken
+                  ? {
+                      ...entry,
+                      status: "issued",
+                      revokedReason: undefined,
+                      expiresAt: Number.isFinite(nextExpiryAt) ? nextExpiryAt : entry.expiresAt,
+                      lastSeenAt: Date.now(),
+                    }
+                  : entry
+              )
+            );
+            setStudentTokenAdminContexts((prev) => {
+              const next = { ...prev };
+              delete next[targetToken];
+              return next;
+            });
+            appendTokenActivityLog(
+              targetToken,
+              tr(
+                language,
+                "Token direaktivasi oleh proktor dan siap login ulang.",
+                "Token was reactivated by the proctor and is ready for a fresh login."
+              ),
+              "success",
+              {
+                activityState: "waiting_claim",
+              }
+            );
+            await loadAdminMonitor();
+
+            const message = tr(
+              language,
+              `Token siswa ${targetToken} berhasil direaktivasi.`,
+              `Student token ${targetToken} was reactivated successfully.`
+            );
+            setReactivateTokenStatus(message);
+            addLog(`Student token reactivated: token=${targetToken}`);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setReactivateTokenStatus(
+              tr(
+                language,
+                `Gagal reaktivasi token: ${message}`,
+                `Token reactivation failed: ${message}`
+              )
+            );
+            addLog(`Student token reactivation failed: token=${targetToken} | ${message}`);
+          } finally {
+            setReactivateTokenPending(false);
           }
         }}
         onPauseSession={async () => {
@@ -5405,6 +5838,9 @@ export default function App() {
           );
           setRevokeTokenStatus(
             tr(nextLanguage, "Masukkan token siswa untuk revoke.", "Enter a student token to revoke.")
+          );
+          setReactivateTokenStatus(
+            tr(nextLanguage, "Masukkan token siswa untuk reaktivasi.", "Enter a student token to reactivate.")
           );
           setSessionControlStatus(
             tr(nextLanguage, "Kontrol sesi siap.", "Session control ready.")

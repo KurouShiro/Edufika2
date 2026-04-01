@@ -173,18 +173,15 @@ class HeartbeatService : Service() {
                         sendStatus("heartbeat_failed: suspended_window", "SUSPENDED")
                         tryReconnect("SUSPEND_WINDOW")
                     }
-                    staleMillis >= TestConstants.HEARTBEAT_TIMEOUT_MILLIS -> {
+                    staleMillis >= TestConstants.HEARTBEAT_OFFLINE_GRACE_MILLIS -> {
                         offlineGraceAnnounced = false
                         sendStatus("heartbeat_failed: degraded_window", "DEGRADED")
+                        tryReconnect("DEGRADED_WINDOW")
                     }
                     else -> {
                         offlineGraceAnnounced = false
                         sendStatus("heartbeat_failed", "ACTIVE")
                     }
-                }
-
-                if (consecutiveFailures >= 3) {
-                    tryReconnect("CONSECUTIVE_FAILURES")
                 }
             }
 

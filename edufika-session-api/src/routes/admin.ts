@@ -16,6 +16,12 @@ const revokeStudentSchema = z.object({
   reason: z.string().trim().min(1).max(256).optional(),
 });
 
+const reactivateStudentSchema = z.object({
+  session_id: z.string().trim().min(1),
+  access_signature: z.string().trim().min(1),
+  student_token: z.string().trim().min(1),
+});
+
 const pauseResumeSchema = z.object({
   session_id: z.string().trim().min(1),
   access_signature: z.string().trim().min(1),
@@ -59,6 +65,26 @@ export function createAdminRouter(service: SessionService): Router {
         student_token: result.studentToken,
         binding_ids: result.bindingIds,
         reason: result.reason,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/reactivate-student", async (req, res, next) => {
+    try {
+      const parsed = reactivateStudentSchema.parse(req.body);
+      const result = await service.reactivateStudentToken(
+        parsed.session_id,
+        parsed.access_signature,
+        parsed.student_token
+      );
+      res.json({
+        ok: true,
+        student_token: result.studentToken,
+        binding_ids_cleared: result.bindingIdsCleared,
+        session_state: result.sessionState,
+        expires_at: result.expiresAt,
       });
     } catch (error) {
       next(error);

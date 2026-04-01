@@ -9,6 +9,24 @@ export type AdminGeneratedTokenItem = {
 };
 
 type SessionMode = "BROWSER_LOCKDOWN" | "HYBRID" | "IN_APP_QUIZ";
+export type TokenActivityState =
+  | "waiting_claim"
+  | "on_exam_screen"
+  | "disconnected"
+  | "revoked"
+  | "expired"
+  | "paused";
+
+export type TokenActivityLogItem = {
+  id: string;
+  token: string;
+  timestampLabel: string;
+  message: string;
+  tone: "neutral" | "warning" | "danger" | "success";
+  activityState?: TokenActivityState;
+  violationType?: string;
+  examWebsite?: string;
+};
 
 type AdminDashboardPanelProps = {
   language: AppLanguage;
@@ -31,6 +49,10 @@ type AdminDashboardPanelProps = {
   selectedMonitorToken: string;
   selectedMonitorDetail: AdminTokenMonitorDetail | null;
   logs: string[];
+  tokenActivityLogsByToken: Record<string, TokenActivityLogItem[]>;
+  reactivateTokenInput: string;
+  reactivateTokenStatus: string;
+  reactivateTokenPending: boolean;
   onSelectMonitorToken: (token: string) => void;
   onTokenBatchCountChange: (value: string) => void;
   onSessionModeChange: (value: SessionMode) => void;
@@ -43,6 +65,8 @@ type AdminDashboardPanelProps = {
   onSaveProctorPinForAll: () => void;
   onRevokeTokenInputChange: (value: string) => void;
   onRevokeStudentToken: () => void;
+  onReactivateTokenInputChange: (value: string) => void;
+  onReactivateStudentToken: () => void;
   onPauseSession: () => void;
   onResumeSession: () => void;
   onReissueSignature: () => void;
@@ -67,8 +91,20 @@ export type AdminTokenMonitorItem = {
   status: MonitorStatus;
   ipAddress: string;
   deviceName: string;
+  bindingId: string;
+  sessionState: string;
+  activityState: TokenActivityState;
+  activitySummary: string;
+  launchUrl: string;
+  lockReason: string;
+  latestViolationType: string;
+  latestViolationDetail: string;
+  latestViolationAtLabel: string;
+  claimedAtLabel: string;
   expiresAtLabel: string;
   lastSeenLabel: string;
+  lastSeenAtMs: number | null;
+  staleSeconds: number | null;
 };
 
 export type AdminTokenQuizResult = {
@@ -88,8 +124,18 @@ export type AdminTokenMonitorDetail = {
   status: MonitorStatus;
   ipAddress: string;
   deviceName: string;
+  bindingId: string;
+  sessionState: string;
+  activityState: TokenActivityState;
+  activitySummary: string;
+  latestViolationType: string;
+  latestViolationDetail: string;
+  latestViolationAtLabel: string;
+  lockReason: string;
   expiresAtLabel: string;
   lastSeenLabel: string;
+  lastSeenAtMs: number | null;
+  staleSeconds: number | null;
   proctorPin: string;
   pinEffectiveDate: string;
   launchUrl: string;
@@ -120,6 +166,10 @@ export default function AdminDashboardPanel({
   selectedMonitorToken,
   selectedMonitorDetail,
   logs,
+  tokenActivityLogsByToken,
+  reactivateTokenInput,
+  reactivateTokenStatus,
+  reactivateTokenPending,
   onSelectMonitorToken,
   onTokenBatchCountChange,
   onSessionModeChange,
@@ -132,6 +182,8 @@ export default function AdminDashboardPanel({
   onSaveProctorPinForAll,
   onRevokeTokenInputChange,
   onRevokeStudentToken,
+  onReactivateTokenInputChange,
+  onReactivateStudentToken,
   onPauseSession,
   onResumeSession,
   onReissueSignature,
@@ -148,12 +200,64 @@ export default function AdminDashboardPanel({
   onTabChange,
 }: AdminDashboardPanelProps) {
   const [tab, setTab] = useState<AdminTab>("monitor");
-  const activeCount = useMemo(() => Math.max(1, Math.min(99, logs.length)), [logs.length]);
-  const alertCount = useMemo(() => logs.filter((entry) => entry.toLowerCase().includes("risk") || entry.toLowerCase().includes("violation")).length, [logs]);
+  const [activityTokenTab, setActivityTokenTab] = useState("");
+  const [liveTick, setLiveTick] = useState(0);
+  const activeCount = useMemo(
+    () => tokenMonitorItems.filter((entry) => entry.activityState === "on_exam_screen").length,
+    [tokenMonitorItems]
+  );
+  const alertCount = useMemo(
+    () =>
+      tokenMonitorItems.filter(
+        (entry) => entry.status === "revoked" || entry.status === "offline" || Boolean(entry.latestViolationType)
+      ).length,
+    [tokenMonitorItems]
+  );
+  const activityTokenKeys = useMemo(() => {
+    const keys = new Set<string>();
+    tokenMonitorItems.forEach((entry) => {
+      if (entry.role === "student") {
+        keys.add(entry.token.trim().toUpperCase());
+      }
+    });
+    Object.keys(tokenActivityLogsByToken).forEach((token) => {
+      if (token.trim()) {
+        keys.add(token.trim().toUpperCase());
+      }
+    });
+    return Array.from(keys);
+  }, [tokenActivityLogsByToken, tokenMonitorItems]);
+  const selectedActivityLogs = activityTokenTab ? tokenActivityLogsByToken[activityTokenTab] ?? [] : [];
 
   useEffect(() => {
     onTabChange?.(tab);
   }, [onTabChange, tab]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setLiveTick((value) => (value + 1) % 1_000_000);
+    }, 200);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (activityTokenKeys.length === 0) {
+      if (activityTokenTab) {
+        setActivityTokenTab("");
+      }
+      return;
+    }
+    const normalizedSelected = activityTokenTab.trim().toUpperCase();
+    if (normalizedSelected && activityTokenKeys.includes(normalizedSelected)) {
+      return;
+    }
+    const preferred = selectedMonitorToken.trim().toUpperCase();
+    if (preferred && activityTokenKeys.includes(preferred)) {
+      setActivityTokenTab(preferred);
+      return;
+    }
+    setActivityTokenTab(activityTokenKeys[0]);
+  }, [activityTokenKeys, activityTokenTab, selectedMonitorToken]);
 
   return (
     <Layout
@@ -218,7 +322,14 @@ export default function AdminDashboardPanel({
               <Text style={styles.pinStatus}>{proctorPinStatus}</Text>
             </View>
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>{tr(language, "Status Token Tergenerate", "Generated Token Status")}</Text>
+              <View style={styles.cardHeaderRow}>
+                <Text style={styles.cardTitle}>
+                  {tr(language, "Status Token Tergenerate", "Generated Token Status")}
+                </Text>
+                <Text style={styles.liveBadge}>
+                  {tr(language, "LIVE // 5Hz", "LIVE // 5Hz")}
+                </Text>
+              </View>
               {backendMonitorError ? (
                 <Text style={styles.monitorErrorText}>
                   {tr(language, "Monitor backend error", "Monitor backend error")}: {backendMonitorError}
@@ -243,16 +354,22 @@ export default function AdminDashboardPanel({
                       <StatusBadge status={item.status} />
                     </View>
                     <Text style={styles.tokenMeta}>
-                      {tr(language, "Peran", "Role")}: {item.role.toUpperCase()}
+                      {tr(language, "Aktivitas", "Activity")}:{" "}
+                      {formatActivityStateLabel(language, item.activityState)}
                     </Text>
                     <Text style={styles.tokenMeta}>
-                      IP: {item.ipAddress} | {tr(language, "Perangkat", "Device")}: {item.deviceName}
+                      {item.activitySummary}
                     </Text>
                     <Text style={styles.tokenMeta}>
-                      {tr(language, "Last Seen", "Last Seen")}: {item.lastSeenLabel}
+                      {tr(language, "Heartbeat", "Heartbeat")}:{" "}
+                      {formatHeartbeatAge(language, item.lastSeenAtMs, liveTick)} | {tr(language, "State", "State")}:{" "}
+                      {item.sessionState}
                     </Text>
                     <Text style={styles.tokenMeta}>
-                      {tr(language, "Kadaluarsa", "Expires")}: {item.expiresAtLabel}
+                      {tr(language, "Pelanggaran", "Violation")}: {item.latestViolationType || "-"}
+                    </Text>
+                    <Text style={styles.tokenMeta} numberOfLines={1}>
+                      {tr(language, "Website Ujian", "Exam Website")}: {item.launchUrl || "-"}
                     </Text>
                   </Pressable>
                 ))
@@ -274,14 +391,50 @@ export default function AdminDashboardPanel({
                     {tr(language, "Peran", "Role")}: {selectedMonitorDetail.role.toUpperCase()}
                   </Text>
                   <Text style={styles.tokenMeta}>
+                    {tr(language, "Aktivitas", "Activity")}:{" "}
+                    {formatActivityStateLabel(language, selectedMonitorDetail.activityState)}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {selectedMonitorDetail.activitySummary}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
                     IP: {selectedMonitorDetail.ipAddress} | {tr(language, "Perangkat", "Device")}:{" "}
                     {selectedMonitorDetail.deviceName}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Heartbeat", "Heartbeat")}:{" "}
+                    {formatHeartbeatAge(language, selectedMonitorDetail.lastSeenAtMs, liveTick)}
                   </Text>
                   <Text style={styles.tokenMeta}>
                     {tr(language, "Last Seen", "Last Seen")}: {selectedMonitorDetail.lastSeenLabel}
                   </Text>
                   <Text style={styles.tokenMeta}>
                     {tr(language, "Kadaluarsa", "Expires")}: {selectedMonitorDetail.expiresAtLabel}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Session State", "Session State")}: {selectedMonitorDetail.sessionState}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Binding", "Binding")}: {selectedMonitorDetail.bindingId || "-"}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Lock Reason", "Lock Reason")}: {selectedMonitorDetail.lockReason || "-"}
+                  </Text>
+                  <Text style={styles.detailSectionTitle}>{tr(language, "Aktivitas Langsung", "Live Activity")}</Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Violation Type", "Violation Type")}:{" "}
+                    {selectedMonitorDetail.latestViolationType || "-"}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Violation Detail", "Violation Detail")}:{" "}
+                    {selectedMonitorDetail.latestViolationDetail || "-"}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Violation At", "Violation At")}:{" "}
+                    {selectedMonitorDetail.latestViolationAtLabel || "-"}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "Website Ujian", "Exam Website")}: {selectedMonitorDetail.launchUrl || "-"}
                   </Text>
                   {selectedMonitorDetail.quizResult ? (
                     <>
@@ -311,26 +464,20 @@ export default function AdminDashboardPanel({
                         {tr(language, "Peminatan", "Elective")}: {selectedMonitorDetail.quizResult.studentElective}
                       </Text>
                     </>
-                  ) : (
-                    <>
-                      <Text style={styles.detailSectionTitle}>
-                        {tr(language, "Info Token Website", "Website Token Info")}
-                      </Text>
-                      <Text style={styles.tokenMeta}>
-                        {tr(language, "PIN Proktor", "Proctor PIN")}: {selectedMonitorDetail.proctorPin || "-"}
-                      </Text>
-                      <Text style={styles.tokenMeta}>
-                        {tr(language, "PIN Efektif", "PIN Effective")}:{" "}
-                        {selectedMonitorDetail.pinEffectiveDate || "-"}
-                      </Text>
-                      <Text style={styles.tokenMeta}>
-                        {tr(language, "URL Binding", "URL Binding")}: {selectedMonitorDetail.launchUrl || "-"}
-                      </Text>
-                      <Text style={styles.tokenMeta}>
-                        {tr(language, "URL Update", "URL Updated")}: {selectedMonitorDetail.launchUpdatedAt || "-"}
-                      </Text>
-                    </>
-                  )}
+                  ) : null}
+                  <Text style={styles.detailSectionTitle}>
+                    {tr(language, "Info Token Website", "Website Token Info")}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "PIN Proktor", "Proctor PIN")}: {selectedMonitorDetail.proctorPin || "-"}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "PIN Efektif", "PIN Effective")}:{" "}
+                    {selectedMonitorDetail.pinEffectiveDate || "-"}
+                  </Text>
+                  <Text style={styles.tokenMeta}>
+                    {tr(language, "URL Update", "URL Updated")}: {selectedMonitorDetail.launchUpdatedAt || "-"}
+                  </Text>
                 </>
               )}
             </View>
@@ -486,22 +633,131 @@ export default function AdminDashboardPanel({
               />
               <Text style={styles.infoLine}>{revokeTokenStatus}</Text>
             </View>
+
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{tr(language, "Reaktivasi Token Siswa", "Reactivate Student Token")}</Text>
+              <Text style={styles.infoLine}>
+                {tr(
+                  language,
+                  "Gunakan saat false positive akibat koneksi/jaringan. Token akan dibuka ulang agar siswa bisa login kembali.",
+                  "Use this for false positives caused by connectivity/network issues. The token will be reopened so the student can log in again."
+                )}
+              </Text>
+              <TerminalInput
+                value={reactivateTokenInput}
+                onChangeText={onReactivateTokenInputChange}
+                label={tr(language, "Token Siswa", "Student Token")}
+                placeholder={selectedMonitorToken || "S-XXXXXXXXXX"}
+                autoCapitalize="characters"
+                autoCorrect={false}
+              />
+              {selectedMonitorToken ? (
+                <Pressable style={styles.inlineActionBtn} onPress={() => onReactivateTokenInputChange(selectedMonitorToken)}>
+                  <Text style={styles.inlineActionText}>
+                    {tr(language, "Gunakan token monitor terpilih", "Use selected monitor token")}
+                  </Text>
+                </Pressable>
+              ) : null}
+              <TerminalButton
+                label={
+                  reactivateTokenPending
+                    ? tr(language, "Memproses Reaktivasi...", "Reactivating...")
+                    : tr(language, "Reaktivasi Token Siswa", "Reactivate Student Token")
+                }
+                variant="outline"
+                onPress={onReactivateStudentToken}
+                disabled={reactivateTokenPending}
+              />
+              <Text style={styles.infoLine}>{reactivateTokenStatus}</Text>
+            </View>
           </>
         ) : null}
 
         {tab === "logs" ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>{tr(language, "Live Logs", "Live Logs")}</Text>
-            {logs.length === 0 ? (
-              <Text style={styles.emptyText}>{tr(language, "Belum ada log.", "No logs yet.")}</Text>
-            ) : (
-              logs.slice(0, 60).map((entry, index) => (
-                <View key={`${index}-${entry}`} style={styles.logItem}>
-                  <Text style={styles.logText}>{entry}</Text>
-                </View>
-              ))
-            )}
-          </View>
+          <>
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{tr(language, "Live Logs", "Live Logs")}</Text>
+              {logs.length === 0 ? (
+                <Text style={styles.emptyText}>{tr(language, "Belum ada log.", "No logs yet.")}</Text>
+              ) : (
+                logs.slice(0, 60).map((entry, index) => (
+                  <View key={`${index}-${entry}`} style={styles.logItem}>
+                    <Text style={styles.logText}>{entry}</Text>
+                  </View>
+                ))
+              )}
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{tr(language, "Aktivitas Token Aktif", "Active Token Activity")}</Text>
+              {activityTokenKeys.length === 0 ? (
+                <Text style={styles.emptyText}>
+                  {tr(language, "Belum ada aktivitas token aktif.", "No active token activity yet.")}
+                </Text>
+              ) : (
+                <>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.activityTabs}
+                  >
+                    {activityTokenKeys.map((token) => (
+                      <Pressable
+                        key={token}
+                        style={[styles.activityTabBtn, activityTokenTab === token ? styles.activityTabBtnActive : null]}
+                        onPress={() => setActivityTokenTab(token)}
+                      >
+                        <Text
+                          style={[styles.activityTabText, activityTokenTab === token ? styles.activityTabTextActive : null]}
+                        >
+                          {token}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+
+                  {selectedActivityLogs.length === 0 ? (
+                    <Text style={styles.emptyText}>
+                      {tr(
+                        language,
+                        "Belum ada log aktivitas untuk token ini.",
+                        "There are no activity logs for this token yet."
+                      )}
+                    </Text>
+                  ) : (
+                    selectedActivityLogs.map((entry) => (
+                      <View
+                        key={entry.id}
+                        style={[
+                          styles.activityLogItem,
+                          entry.tone === "warning"
+                            ? styles.activityLogWarning
+                            : entry.tone === "danger"
+                              ? styles.activityLogDanger
+                              : entry.tone === "success"
+                                ? styles.activityLogSuccess
+                                : null,
+                        ]}
+                      >
+                        <Text style={styles.activityLogStamp}>{entry.timestampLabel}</Text>
+                        <Text style={styles.activityLogText}>{entry.message}</Text>
+                        {entry.violationType ? (
+                          <Text style={styles.activityLogMeta}>
+                            {tr(language, "Violation", "Violation")}: {entry.violationType}
+                          </Text>
+                        ) : null}
+                        {entry.examWebsite ? (
+                          <Text style={styles.activityLogMeta} numberOfLines={1}>
+                            {tr(language, "Website", "Website")}: {entry.examWebsite}
+                          </Text>
+                        ) : null}
+                      </View>
+                    ))
+                  )}
+                </>
+              )}
+            </View>
+          </>
         ) : null}
       </ScrollView>
     </Layout>
@@ -527,6 +783,7 @@ function MetricCard({ label, value, tone }: { label: string; value: string; tone
 
 function StatusBadge({ status }: { status: MonitorStatus }) {
   const isOnline = status === "online";
+  const isOffline = status === "offline";
   const isRevoked = status === "revoked";
   const isExpired = status === "expired";
   return (
@@ -534,6 +791,7 @@ function StatusBadge({ status }: { status: MonitorStatus }) {
       style={[
         styles.statusBadge,
         isOnline ? styles.statusOnline : null,
+        isOffline ? styles.statusOffline : null,
         isRevoked ? styles.statusRevoked : null,
         isExpired ? styles.statusExpired : null,
       ]}
@@ -541,6 +799,45 @@ function StatusBadge({ status }: { status: MonitorStatus }) {
       <Text style={styles.statusText}>{status.toUpperCase()}</Text>
     </View>
   );
+}
+
+function formatActivityStateLabel(language: AppLanguage, activityState: TokenActivityState): string {
+  switch (activityState) {
+    case "on_exam_screen":
+      return tr(language, "Di Layar Ujian", "On Exam Screen");
+    case "disconnected":
+      return tr(language, "Terputus", "Disconnected");
+    case "revoked":
+      return tr(language, "Terkunci", "Locked");
+    case "expired":
+      return tr(language, "Kadaluarsa", "Expired");
+    case "paused":
+      return tr(language, "Dipause", "Paused");
+    case "waiting_claim":
+    default:
+      return tr(language, "Menunggu Klaim", "Waiting for Claim");
+  }
+}
+
+function formatHeartbeatAge(language: AppLanguage, lastSeenAtMs: number | null, tick: number): string {
+  void tick;
+  if (!lastSeenAtMs || Number.isNaN(lastSeenAtMs)) {
+    return tr(language, "Belum ada heartbeat", "No heartbeat yet");
+  }
+  const diffMs = Math.max(0, Date.now() - lastSeenAtMs);
+  if (diffMs < 1000) {
+    return tr(language, "baru saja", "just now");
+  }
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) {
+    return tr(language, `${seconds} dtk lalu`, `${seconds}s ago`);
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return tr(language, `${minutes} mnt lalu`, `${minutes}m ago`);
+  }
+  const hours = Math.floor(minutes / 60);
+  return tr(language, `${hours} jam lalu`, `${hours}h ago`);
 }
 
 const styles = StyleSheet.create({
@@ -613,11 +910,24 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 10,
   },
+  cardHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
   cardTitle: {
     color: "#1f2937",
     fontFamily: "Montserrat-Bold",
     fontSize: 12,
     marginBottom: 8,
+  },
+  liveBadge: {
+    color: "#166534",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 9,
+    letterSpacing: 0.7,
   },
   infoLine: {
     color: "#6b7280",
@@ -794,6 +1104,21 @@ const styles = StyleSheet.create({
     fontSize: 9,
     letterSpacing: 0.3,
   },
+  inlineActionBtn: {
+    borderWidth: 1,
+    borderColor: "rgba(34,197,94,0.25)",
+    borderRadius: 10,
+    backgroundColor: "rgba(34,197,94,0.08)",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  inlineActionText: {
+    color: "#166534",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 9,
+    letterSpacing: 0.2,
+  },
   statusBadge: {
     borderWidth: 1,
     borderColor: "#9ca3af",
@@ -805,6 +1130,10 @@ const styles = StyleSheet.create({
   statusOnline: {
     borderColor: "rgba(34,197,94,0.45)",
     backgroundColor: "rgba(34,197,94,0.14)",
+  },
+  statusOffline: {
+    borderColor: "rgba(245,158,11,0.45)",
+    backgroundColor: "rgba(245,158,11,0.14)",
   },
   statusRevoked: {
     borderColor: "rgba(239,68,68,0.45)",
@@ -825,6 +1154,70 @@ const styles = StyleSheet.create({
     fontFamily: "Montserrat-SemiBold",
     fontSize: 11,
     marginBottom: 8,
+  },
+  activityTabs: {
+    gap: 6,
+    paddingBottom: 8,
+  },
+  activityTabBtn: {
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: 10,
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  activityTabBtnActive: {
+    borderColor: palette.neon,
+    backgroundColor: "rgba(34,197,94,0.12)",
+  },
+  activityTabText: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 9,
+    letterSpacing: 0.4,
+  },
+  activityTabTextActive: {
+    color: "#166534",
+  },
+  activityLogItem: {
+    borderWidth: 1,
+    borderColor: "#e5e7eb",
+    borderRadius: 14,
+    backgroundColor: "#f8fafc",
+    padding: 10,
+    marginBottom: 8,
+  },
+  activityLogWarning: {
+    borderColor: "rgba(245,158,11,0.28)",
+    backgroundColor: "rgba(245,158,11,0.08)",
+  },
+  activityLogDanger: {
+    borderColor: "rgba(239,68,68,0.28)",
+    backgroundColor: "rgba(239,68,68,0.08)",
+  },
+  activityLogSuccess: {
+    borderColor: "rgba(34,197,94,0.28)",
+    backgroundColor: "rgba(34,197,94,0.08)",
+  },
+  activityLogStamp: {
+    color: "#9ca3af",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 9,
+    marginBottom: 4,
+  },
+  activityLogText: {
+    color: "#1f2937",
+    fontFamily: "Montserrat-Regular",
+    fontSize: 10,
+    lineHeight: 15,
+    marginBottom: 4,
+  },
+  activityLogMeta: {
+    color: "#6b7280",
+    fontFamily: "Montserrat-Regular",
+    fontSize: 9,
+    lineHeight: 14,
   },
   footerWrap: {
     gap: 0,

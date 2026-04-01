@@ -152,14 +152,24 @@ export default function ExamBrowserScreen({
   onDismissIntegrityWarning,
   onBlockedNavigation,
 }: ExamBrowserScreenProps) {
+  const webViewRef = useRef<WebView>(null);
   const blockedOnceRef = useRef(false);
+  const [currentUrl, setCurrentUrl] = useState(url);
   const [blockedMessage, setBlockedMessage] = useState("");
   const [webError, setWebError] = useState("");
+  const [isPageLoading, setIsPageLoading] = useState(true);
   const [showExitModal, setShowExitModal] = useState(false);
 
   useEffect(() => {
     onProctorPinModalVisibleChange?.(showExitModal);
   }, [onProctorPinModalVisibleChange, showExitModal]);
+
+  useEffect(() => {
+    setCurrentUrl(url);
+    setBlockedMessage("");
+    setWebError("");
+    setIsPageLoading(true);
+  }, [url]);
 
   const allowedHosts = useMemo(() => {
     const normalized = normalizeAllowlist(whitelist);
@@ -169,6 +179,13 @@ export default function ExamBrowserScreen({
     }
     return normalized;
   }, [url, whitelist]);
+
+  const handleRefresh = () => {
+    setBlockedMessage("");
+    setWebError("");
+    setIsPageLoading(true);
+    webViewRef.current?.reload();
+  };
 
   return (
     <Layout
@@ -184,12 +201,17 @@ export default function ExamBrowserScreen({
       <View style={styles.headerBar}>
         <View style={styles.headerLeft}>
           <Text style={styles.urlText} numberOfLines={1}>
-            {url}
+            {currentUrl}
           </Text>
         </View>
         <View style={styles.timerPill}>
           <Text style={styles.timerText}>{sessionTimeLeft}</Text>
         </View>
+        <Pressable style={styles.refreshChip} onPress={handleRefresh}>
+          <Text style={styles.refreshChipText}>
+            {isPageLoading ? tr(language, "MEMUAT", "LOADING") : tr(language, "REFRESH", "REFRESH")}
+          </Text>
+        </Pressable>
         <Pressable style={styles.exitChip} onPress={() => setShowExitModal(true)}>
           <Text style={styles.exitChipText}>{tr(language, "EXIT", "EXIT")}</Text>
         </Pressable>
@@ -197,6 +219,7 @@ export default function ExamBrowserScreen({
 
       <View style={styles.browserShell}>
         <WebView
+          ref={webViewRef}
           source={{ uri: url }}
           style={styles.webview}
           originWhitelist={["http://*", "https://*"]}
@@ -205,6 +228,16 @@ export default function ExamBrowserScreen({
           setSupportMultipleWindows={false}
           allowsBackForwardNavigationGestures={false}
           startInLoadingState
+          onLoadStart={() => {
+            setIsPageLoading(true);
+            setWebError("");
+          }}
+          onLoadEnd={() => {
+            setIsPageLoading(false);
+          }}
+          onNavigationStateChange={(navState: WebViewNavigation) => {
+            setCurrentUrl(navState.url || url);
+          }}
           renderLoading={() => (
             <View style={styles.loaderWrap}>
               <ActivityIndicator size="small" color="#22c55e" />
@@ -227,9 +260,11 @@ export default function ExamBrowserScreen({
             return true;
           }}
           onHttpError={(event) => {
+            setIsPageLoading(false);
             setWebError(`HTTP ${event.nativeEvent.statusCode}: ${event.nativeEvent.description}`);
           }}
           onError={(event) => {
+            setIsPageLoading(false);
             setWebError(
               event.nativeEvent.description || tr(language, "Halaman ujian tidak dapat dimuat.", "Unable to load exam page.")
             );
@@ -328,6 +363,20 @@ const styles = StyleSheet.create({
   },
   exitChipText: {
     color: "#6b7280",
+    fontFamily: "Montserrat-Bold",
+    fontSize: 10,
+    letterSpacing: 0.7,
+  },
+  refreshChip: {
+    backgroundColor: "rgba(34,197,94,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(34,197,94,0.22)",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  refreshChipText: {
+    color: "#166534",
     fontFamily: "Montserrat-Bold",
     fontSize: 10,
     letterSpacing: 0.7,

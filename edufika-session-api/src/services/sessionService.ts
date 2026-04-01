@@ -1833,6 +1833,145 @@ export class SessionService {
     }
   }
 
+  async reactivateStudentToken(
+    sessionId: string,
+    accessSignature: string,
+    studentToken: string
+  ): Promise<{
+    studentToken: string;
+    bindingIdsCleared: string[];
+    expiresAt: string | null;
+    sessionState: SessionState;
+  }> {
+    const client = await dbPool.connect();
+    const normalizedToken = studentToken.trim().toUpperCase();
+
+    try {
+      await client.query("BEGIN");
+      const auth = await this.authenticate(client, sessionId, accessSignature);
+      if (auth.role === "student") {
+        throw new ApiError(403, "Student role cannot reactivate student token");
+      }
+
+      const tokenResult = await client.query<{
+        token: string;
+        expires_at: Date | string | null;
+        session_status: SessionState;
+      }>(
+        `
+          SELECT
+            st.token,
+            st.expires_at,
+            es.status AS session_status
+          FROM session_tokens st
+          JOIN exam_sessions es ON es.id = st.exam_session_id
+          WHERE st.exam_session_id = $1
+            AND st.token = $2
+            AND st.role = 'student'
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [sessionId, normalizedToken]
+      );
+
+      if (tokenResult.rowCount === 0) {
+        throw new ApiError(404, "Student token not found in this exam session");
+      }
+
+      const tokenRow = tokenResult.rows[0];
+      if (tokenRow.session_status === "FINISHED" || tokenRow.session_status === "REVOKED") {
+        throw new ApiError(409, `Session is ${tokenRow.session_status}`);
+      }
+
+      const bindingRows = await client.query<{ binding_id: string }>(
+        `
+          SELECT db.id AS binding_id
+          FROM device_bindings db
+          JOIN session_tokens st ON st.token = db.token
+          WHERE st.exam_session_id = $1
+            AND st.token = $2
+            AND db.role = 'student'
+          FOR UPDATE
+        `,
+        [sessionId, normalizedToken]
+      );
+
+      if ((bindingRows.rowCount ?? 0) > 0) {
+        await client.query(
+          `
+            DELETE db
+            FROM device_bindings db
+            JOIN session_tokens st ON st.token = db.token
+            WHERE st.exam_session_id = $1
+              AND st.token = $2
+              AND db.role = 'student'
+          `,
+          [sessionId, normalizedToken]
+        );
+      }
+
+      await client.query(
+        `
+          UPDATE session_tokens
+          SET claimed = FALSE,
+              claimed_at = NULL,
+              expires_at = CASE
+                WHEN expires_at IS NULL OR expires_at > now() THEN expires_at
+                ELSE DATE_ADD(now(), INTERVAL $3 MINUTE)
+              END
+          WHERE exam_session_id = $1
+            AND token = $2
+            AND role = 'student'
+        `,
+        [sessionId, normalizedToken, config.defaultTokenTtlMinutes]
+      );
+
+      let nextSessionState: SessionState = tokenRow.session_status;
+      if (tokenRow.session_status !== "PAUSED") {
+        await this.setSessionState(client, sessionId, "IN_PROGRESS");
+        nextSessionState = "IN_PROGRESS";
+      }
+
+      const refreshedToken = await client.query<{ expires_at: Date | string | null }>(
+        `
+          SELECT expires_at
+          FROM session_tokens
+          WHERE exam_session_id = $1
+            AND token = $2
+            AND role = 'student'
+          LIMIT 1
+        `,
+        [sessionId, normalizedToken]
+      );
+
+      await client.query("COMMIT");
+
+      this.wsHub.broadcast("student_token_reactivated", {
+        session_id: sessionId,
+        student_token: normalizedToken,
+        binding_ids_cleared: bindingRows.rows.map((row) => row.binding_id),
+        by: auth.bindingId,
+        session_state: nextSessionState,
+        at: dayjs().toISOString(),
+      });
+
+      return {
+        studentToken: normalizedToken,
+        bindingIdsCleared: bindingRows.rows.map((row) => row.binding_id),
+        expiresAt:
+          refreshedToken.rowCount && refreshedToken.rows[0].expires_at
+            ? dayjs(refreshedToken.rows[0].expires_at).toISOString()
+            : null,
+        sessionState: nextSessionState,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async getSessionMonitor(
     sessionId: string,
     accessSignature: string
@@ -1851,6 +1990,19 @@ export class SessionService {
       deviceName: string | null;
       lastSeenAt: string | null;
       lockReason: string | null;
+      staleSeconds: number | null;
+      sessionState: SessionState;
+      launchUrl: string | null;
+      activityState:
+        | "waiting_claim"
+        | "on_exam_screen"
+        | "disconnected"
+        | "revoked"
+        | "expired"
+        | "paused";
+      latestViolationType: string | null;
+      latestViolationDetail: string | null;
+      latestViolationAt: string | null;
     }>;
   }> {
     const client = await dbPool.connect();
@@ -1873,6 +2025,11 @@ export class SessionService {
         locked: number | boolean | null;
         lock_reason: string | null;
         stale_seconds: number | null;
+        session_state: SessionState;
+        launch_url: string | null;
+        latest_violation_type: string | null;
+        latest_violation_detail: string | null;
+        latest_violation_at: Date | string | null;
       }>(
         `
           SELECT
@@ -1887,9 +2044,31 @@ export class SessionService {
             db.last_seen_at,
             db.locked,
             db.lock_reason,
-            TIMESTAMPDIFF(SECOND, db.last_seen_at, NOW()) AS stale_seconds
+            TIMESTAMPDIFF(SECOND, db.last_seen_at, NOW()) AS stale_seconds,
+            es.status AS session_state,
+            sbt.launch_url,
+            latest_violation.type AS latest_violation_type,
+            latest_violation.detail AS latest_violation_detail,
+            latest_violation.created_at AS latest_violation_at
           FROM session_tokens st
+          JOIN exam_sessions es ON es.id = st.exam_session_id
           LEFT JOIN device_bindings db ON db.token = st.token
+          LEFT JOIN session_browser_targets sbt ON sbt.exam_session_id = st.exam_session_id
+          LEFT JOIN (
+            SELECT
+              v.binding_id,
+              v.type,
+              JSON_UNQUOTE(JSON_EXTRACT(v.metadata, '$.detail')) AS detail,
+              v.created_at
+            FROM violations v
+            JOIN (
+              SELECT binding_id, MAX(created_at) AS max_created_at
+              FROM violations
+              GROUP BY binding_id
+            ) latest
+              ON latest.binding_id = v.binding_id
+             AND latest.max_created_at = v.created_at
+          ) latest_violation ON latest_violation.binding_id = db.id
           WHERE st.exam_session_id = $1
           ORDER BY st.role ASC, st.token ASC
         `,
@@ -1903,19 +2082,35 @@ export class SessionService {
         const staleSeconds = Number(row.stale_seconds ?? 0);
 
         let status: "issued" | "online" | "offline" | "revoked" | "expired";
+        let activityState:
+          | "waiting_claim"
+          | "on_exam_screen"
+          | "disconnected"
+          | "revoked"
+          | "expired"
+          | "paused";
         if (locked) {
           status = "revoked";
+          activityState = "revoked";
         } else if (toBoolean(row.claimed) && !row.binding_id && row.role === "student") {
           // Claimed student token without an active binding is treated as revoked.
           status = "revoked";
+          activityState = "revoked";
         } else if (expiresAtMs !== null && nowMs >= expiresAtMs) {
           status = "expired";
+          activityState = "expired";
         } else if (!toBoolean(row.claimed) || !row.binding_id) {
           status = "issued";
-        } else if (staleSeconds > config.heartbeatTimeoutSeconds) {
+          activityState = "waiting_claim";
+        } else if (row.session_state === "PAUSED") {
+          status = "online";
+          activityState = "paused";
+        } else if (staleSeconds > config.heartbeatOfflineGraceSeconds) {
           status = "offline";
+          activityState = "disconnected";
         } else {
           status = "online";
+          activityState = "on_exam_screen";
         }
 
         return {
@@ -1930,6 +2125,15 @@ export class SessionService {
           deviceName: row.device_name ?? null,
           lastSeenAt: row.last_seen_at ? dayjs(row.last_seen_at).toISOString() : null,
           lockReason: row.lock_reason ?? null,
+          staleSeconds,
+          sessionState: row.session_state,
+          launchUrl: row.launch_url ?? null,
+          activityState,
+          latestViolationType: row.latest_violation_type ?? null,
+          latestViolationDetail: row.latest_violation_detail ?? null,
+          latestViolationAt: row.latest_violation_at
+            ? dayjs(row.latest_violation_at).toISOString()
+            : null,
         };
       });
 
@@ -3608,7 +3812,7 @@ export class SessionService {
         } else if (staleSeconds >= config.heartbeatSuspendSeconds) {
           nextState = "SUSPENDED";
           reason = "HEARTBEAT_STALE_SUSPENDED";
-        } else if (staleSeconds >= config.heartbeatTimeoutSeconds) {
+        } else if (staleSeconds >= config.heartbeatOfflineGraceSeconds) {
           nextState = "DEGRADED";
           reason = "HEARTBEAT_STALE_DEGRADED";
         } else if (currentState === "DEGRADED" || currentState === "SUSPENDED") {

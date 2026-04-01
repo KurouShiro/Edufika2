@@ -130,7 +130,7 @@ object SessionState {
 
     fun heartbeatTimedOut(): Boolean {
         if (!isStudentSessionActive()) return false
-        return System.currentTimeMillis() - lastHeartbeatMillis > TestConstants.HEARTBEAT_TIMEOUT_MILLIS
+        return System.currentTimeMillis() - lastHeartbeatMillis > TestConstants.HEARTBEAT_OFFLINE_GRACE_MILLIS
     }
 
     fun shouldRotateSignature(): Boolean {

@@ -24,7 +24,14 @@ export const config = {
   wsAuthToken: process.env.WS_AUTH_TOKEN?.trim() || "",
   defaultTokenTtlMinutes: parseIntEnv("DEFAULT_TOKEN_TTL_MINUTES", 120),
   accessSignatureTtlSeconds: parseIntEnv("ACCESS_SIGNATURE_TTL_SECONDS", 300),
-  heartbeatTimeoutSeconds: parseIntEnv("HEARTBEAT_TIMEOUT_SECONDS", 30),
+  heartbeatOfflineGraceSeconds: parseIntEnv(
+    "HEARTBEAT_OFFLINE_GRACE_SECONDS",
+    parseIntEnv("HEARTBEAT_TIMEOUT_SECONDS", 30)
+  ),
+  heartbeatTimeoutSeconds: parseIntEnv(
+    "HEARTBEAT_OFFLINE_GRACE_SECONDS",
+    parseIntEnv("HEARTBEAT_TIMEOUT_SECONDS", 30)
+  ),
   heartbeatSuspendSeconds: parseIntEnv("HEARTBEAT_SUSPEND_SECONDS", 90),
   heartbeatLockSeconds: parseIntEnv("HEARTBEAT_LOCK_SECONDS", 180),
   heartbeatWatchIntervalSeconds: parseIntEnv("HEARTBEAT_WATCH_INTERVAL_SECONDS", 5),
